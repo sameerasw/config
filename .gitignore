@@ -1,1 +1,42 @@
-*.DS_Store
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Thumbnails
+._*
+
+# VCS
+*.swp
+*.swo
+*.tmp
+*.bak
+
+.ssh/
+.gnupg/
+.aws/
+.azure/
+.gcloud/
+.keychain/
+.config/gh/       # GitHub CLI
+.config/git/      # Git credentials/config
+.config/rclone/   # Cloud storage
+.config/1Password/
+.config/Bitwarden/
+.config/Google/   # Google credentials
+Library/Keychains/
+Library/Preferences/com.apple.security*
+
+# Logs and caches
+.cache/
+.history
+.zcompdump
+.npm/
+.yarn/
+.node_repl_history
+
+# Python / Virtualenv
+.venv/
+__pycache__/
+*.pyc
+
