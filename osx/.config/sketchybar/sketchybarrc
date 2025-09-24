@@ -1,0 +1,114 @@
+# Plugins
+PLUGIN_DIR="$CONFIG_DIR/plugins"
+ITEM_DIR="$CONFIG_DIR/items" 
+
+# Tokens
+source "$CONFIG_DIR/tokens/cha_colors.sh"
+source "$CONFIG_DIR/tokens/colors.sh"
+source "$ITEM_DIR/front_app.sh"
+
+# Defaults
+default=(
+	icon.font="Apple Symbols"
+	label.font="JetBrains Mono"
+	icon.color=$COLOR_WHITE
+	label.color=$COLOR_WHITE
+)
+
+sketchybar --default "${default[@]}"
+
+# Bar Appearance
+sketchybar --bar position=top height=28 color=$COLOR_TRANSPARENT
+
+# Workspaces
+workspaces=$(aerospace list-workspaces --all)
+first_workspace=$(echo "$workspaces" | head -n 1)
+last_workspace=$(echo "$workspaces" | tail -n 1)
+
+sketchybar --add event aerospace_workspace_change
+
+for sid in $workspaces; do
+	sketchybar --add item space.$sid center \
+		--subscribe space.$sid aerospace_workspace_change \
+		--set space.$sid \
+      background.color=0xffffffff\
+      background.corner_radius=15 \
+      background.height=10 \
+      background.drawing=off \
+      label.align=center \
+      label.width=10 \
+      label.padding_left=5 \
+      label.padding_right=5 \
+      label="•" \
+      click_script="aerospace workspace $sid" \
+      script="$CONFIG_DIR/plugins/aerospace.sh $sid"
+done
+
+sketchybar --set space.$first_workspace padding_left=2
+
+sketchybar --set space.$last_workspace padding_right=2
+
+sketchybar --add bracket spaces '/space\..*/' \
+	--set spaces background.color=0x66000000 \
+		background.corner_radius=15 \
+		background.height=17 \
+		background.border_width=1 \
+
+# Clock
+sketchybar --add item clock right \
+	--set clock \
+		background.color=0x66000000 \
+		background.corner_radius=15 \
+		background.height=20 \
+		background.border_width=1 \
+		label.padding_left=8 \
+		label.padding_right=8 \
+    label.font="JetBrains Mono:Bold:13.0" \
+		update_freq=10 \
+		script="$PLUGIN_DIR/clock.sh"
+
+# Battery
+# sketchybar --add item battery right \
+#   --set battery \
+#     background.color=0x66000000 \
+#     background.corner_radius=15 \
+#     background.height=20 \
+#     background.border_width=1 \
+#     icon.padding_left=4 \
+#     label.padding_left=4 \
+#     label.padding_right=8 \
+#     update_freq=10 \
+#     script="$PLUGIN_DIR/battery.sh"
+
+
+
+#front app
+# Add the front app item to the right side of the bar
+sketchybar --add item front_app left \
+  --set front_app \
+    background.color=0x66000000 \
+    background.corner_radius=15 \
+    background.height=20 \
+    background.border_width=1 \
+    label.padding_left=8 \
+    label.padding_right=8 \
+    label.font="JetBrains Mono:Bold:13.0" \
+    label.color=$COLOR_WHITE \
+    update_freq=10 \
+    script="$PLUGIN_DIR/front_app.sh"
+
+
+
+##### Adding Right Items #####
+# In the same way as the left items we can add items to the right side.
+# Additional position (e.g. center) are available, see:
+# https://felixkratz.github.io/SketchyBar/config/items#adding-items-to-sketchybar
+
+# Some items refresh on a fixed cycle, e.g. the clock runs its script once
+# every 10s. Other gititems respond to events they subscribe to, e.g. the
+# volume.sh script is only executed once an actual change in system audio
+# volume is registered. More info about the event system can be found here:
+# https://felixkratz.github.io/SketchyBar/config/events
+
+# Force all scripts to run the first time (never do this in a script)
+sketchybar --update

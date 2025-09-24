@@ -1,0 +1,62 @@
+{
+  "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/json_schema.json",
+  "logo": {
+    "type": "kitty",
+    "source": "/Users/sameerasandakelum/Graphics/More +/sameerasw_thumb.png", // https://en.wikipedia.org/wiki/Linux#/media/File:Tux.svg
+    "width": 15,
+    "height": 7,
+    "padding": {
+        "top": 2,
+        "left": 2,
+        "right": 2
+    }
+},
+"display": {
+    "separator": ": ",     // Separator between keys and values
+    "color": {
+        "keys": "blue"    // Key color
+    },
+    "key": {
+        "width": 20,       // Aligns keys to this width
+        "type": "both"   // string, icon, both, or none
+    },
+    "bar": {
+        "width": 10,       // Width of percentage bars
+        "charElapsed": "■", // Character for elapsed portion
+        "charTotal": "-"   // Character for total portion
+    }
+    
+},
+  "modules": [
+    "title",
+    "separator",
+    {
+        "type": "os",
+        "key": "OS",
+        "keyColor": "blue",
+        "format": "{name} {version}"
+    },
+    "host",
+    "kernel",
+    "uptime",
+    "packages",
+    "shell",
+    "display",
+    "de",
+    "wm",
+    "wmtheme",
+    "theme",
+    "icons",
+    "terminal",
+    "terminalfont",
+    "cpu",
+    "gpu",
+    "memory",
+    "swap",
+    "localip",
+    "battery",
+    "poweradapter",
+    "break",
+    "colors"
+  ]
+}

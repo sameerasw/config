@@ -1,0 +1,47 @@
+call plug#begin()
+
+" List your plugins here
+Plug 'tpope/vim-sensible'
+Plug 'shaunsingh/nord.nvim'
+Plug 'nvim-tree/nvim-web-devicons' " Recommended (for coloured icons)
+" Plug 'ryanoasis/vim-devicons' Icons without colours
+Plug 'akinsho/bufferline.nvim', { 'tag': '*' }
+Plug 'nvim-tree/nvim-web-devicons' " optional
+Plug 'nvim-tree/nvim-tree.lua'
+
+call plug#end()
+
+colorscheme nord
+let g:nord_disable_background = v:true
+
+" Disable netrw at the very start
+let g:loaded_netrw = 1
+let g:loaded_netrwPlugin = 1
+
+" Optionally enable 24-bit colour
+set termguicolors
+
+" Load nvim-tree plugin with configuration
+lua << EOF
+require("nvim-tree").setup({
+  sort = {
+    sorter = "case_sensitive",
+  },
+  view = {
+    width = 30,
+  },
+  renderer = {
+    group_empty = true,
+  },
+  filters = {
+    dotfiles = true,
+  },
+})
+EOF
+
+" Auto-open nvim-tree on startup and keep focus in editor
+autocmd VimEnter * lua require("nvim-tree.api").tree.open(); vim.cmd("wincmd l")
+
+" Auto-close Neovim when nvim-tree is the last window
+autocmd BufEnter * if winnr('$') == 1 && bufname() == 'NvimTree_' . tabpagenr() | quit | endif
+
