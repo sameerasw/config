@@ -242,6 +242,19 @@ build_dmg() {
     rm "$dmg_name"
   fi
 
+  # Prepare temporary staging directory for DMG contents
+  local temp_dmg_src="dmg_src"
+  rm -rf "$temp_dmg_src"
+  mkdir -p "$temp_dmg_src"
+
+  if [[ -d "$CONFIG_project_name.app" ]]; then
+    cp -R "$CONFIG_project_name.app" "$temp_dmg_src/"
+  else
+    log_error "Source application not found: $CONFIG_project_name.app"
+    rm -rf "$temp_dmg_src"
+    exit 1
+  fi
+
   # Parse window size from config
   local window_size="$CONFIG_dmg_window_size"
   IFS=',' read -ra window_dims <<< "$window_size"
@@ -267,10 +280,14 @@ build_dmg() {
 
   # Add DMG name and source directory
   cmd+=("$dmg_name")
-  cmd+=("dmg_src/")
+  cmd+=("$temp_dmg_src/")
 
   # Execute the command
   "${cmd[@]}"
+
+  # Clean up staging directory
+  rm -rf "$temp_dmg_src"
+
   log_success "DMG created successfully."
 }
 

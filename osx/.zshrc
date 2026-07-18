@@ -230,3 +230,8 @@ source /Users/sameerasandakelum/.zlugin/zlugin.zsh
 
 PATH=~/.console-ninja/.bin:$PATH
 
+export PATH="$HOME/dev/depot_tools:$PATH"
+export GPG_TTY=$(tty)
+
+# Added by Antigravity
+export PATH="/Users/sameerasandakelum/.antigravity/antigravity/bin:$PATH"

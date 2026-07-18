@@ -5,68 +5,279 @@
             "complex_modifications": {
                 "rules": [
                     {
-                        "description": "R.Option mods",
+                        "description": "Change Backslash (\\) to Enter (Fn+\\ = default) — Built-in keyboard only",
+                        "manipulators": [
+                            {
+                                "conditions": [
+                                    {
+                                        "identifiers": [{ "is_built_in_keyboard": true }],
+                                        "type": "device_if"
+                                    }
+                                ],
+                                "from": {
+                                    "key_code": "backslash",
+                                    "modifiers": { "optional": ["shift"] }
+                                },
+                                "to": [{ "key_code": "return_or_enter" }],
+                                "type": "basic"
+                            }
+                        ]
+                    },
+                    {
+                        "description": "Firefox - Mouse extra button to mission control + space and remap Command+S to Control+Z in Firefox Nightly",
+                        "manipulators": [
+                            {
+                                "conditions": [
+                                    {
+                                        "identifiers": [{ "vendor_id": 1578 }],
+                                        "type": "device_if"
+                                    },
+                                    {
+                                        "bundle_identifiers": [
+                                            "^org\\.mozilla\\.nightly$"
+                                        ],
+                                        "type": "frontmost_application_if"
+                                    }
+                                ],
+                                "from": { "key_code": "f11" },
+                                "to_after_key_up": [
+                                    {
+                                        "set_variable": {
+                                            "name": "mouse_extra_held_down",
+                                            "value": 0
+                                        }
+                                    }
+                                ],
+                                "to_if_alone": [
+                                    {
+                                        "key_code": "z",
+                                        "modifiers": ["left_control"]
+                                    }
+                                ],
+                                "to_if_held_down": [
+                                    {
+                                        "set_variable": {
+                                            "name": "mouse_extra_held_down",
+                                            "value": 1
+                                        }
+                                    },
+                                    { "key_code": "mission_control" }
+                                ],
+                                "type": "basic"
+                            },
+                            {
+                                "conditions": [
+                                    {
+                                        "bundle_identifiers": [
+                                            "^org\\.mozilla\\.nightly$"
+                                        ],
+                                        "type": "frontmost_application_if"
+                                    }
+                                ],
+                                "from": {
+                                    "key_code": "s",
+                                    "modifiers": { "mandatory": ["left_command"] }
+                                },
+                                "to": [
+                                    {
+                                        "key_code": "z",
+                                        "modifiers": ["left_control"]
+                                    }
+                                ],
+                                "type": "basic"
+                            }
+                        ]
+                    },
+                    {
+                        "description": "Double tap cmd+q closes apps",
+                        "enabled": false,
+                        "manipulators": [
+                            {
+                                "conditions": [
+                                    {
+                                        "name": "command-q",
+                                        "type": "variable_if",
+                                        "value": 1
+                                    }
+                                ],
+                                "from": {
+                                    "key_code": "q",
+                                    "modifiers": { "mandatory": ["command"] }
+                                },
+                                "to": [
+                                    {
+                                        "key_code": "q",
+                                        "modifiers": "left_command"
+                                    }
+                                ],
+                                "type": "basic"
+                            },
+                            {
+                                "from": {
+                                    "key_code": "q",
+                                    "modifiers": { "mandatory": ["command"] }
+                                },
+                                "to": [
+                                    {
+                                        "set_variable": {
+                                            "name": "command-q",
+                                            "value": 1
+                                        }
+                                    }
+                                ],
+                                "to_delayed_action": {
+                                    "to_if_canceled": [
+                                        {
+                                            "set_variable": {
+                                                "name": "command-q",
+                                                "value": 0
+                                            }
+                                        }
+                                    ],
+                                    "to_if_invoked": [
+                                        {
+                                            "set_variable": {
+                                                "name": "command-q",
+                                                "value": 0
+                                            }
+                                        }
+                                    ]
+                                },
+                                "type": "basic"
+                            }
+                        ]
+                    },
+                    {
+                        "description": "Dynamic tab and fn",
                         "manipulators": [
                             {
                                 "from": {
-                                    "key_code": "backslash",
-                                    "modifiers": {
-                                        "mandatory": ["right_option"],
-                                        "optional": ["any"]
-                                    }
+                                    "key_code": "tab",
+                                    "modifiers": { "optional": ["any"] }
                                 },
-                                "to": [{ "key_code": "play_or_pause" }],
+                                "to": [{ "key_code": "fn" }],
+                                "to_if_alone": [{ "key_code": "tab" }],
+                                "type": "basic"
+                            }
+                        ]
+                    },
+                    {
+                        "description": "Zen - Mouse extra button to mission control + space and fn + 1-5 macros",
+                        "manipulators": [
+                            {
+                                "conditions": [
+                                    {
+                                        "identifiers": [{ "vendor_id": 1578 }],
+                                        "type": "device_if"
+                                    },
+                                    {
+                                        "bundle_identifiers": [
+                                            "^app\\.zen-browser\\.zen$"
+                                        ],
+                                        "type": "frontmost_application_if"
+                                    }
+                                ],
+                                "from": { "key_code": "f11" },
+                                "to_after_key_up": [
+                                    {
+                                        "set_variable": {
+                                            "name": "mouse_extra_held_down",
+                                            "value": 0
+                                        }
+                                    }
+                                ],
+                                "to_if_alone": [
+                                    {
+                                        "key_code": "s",
+                                        "modifiers": "left_command"
+                                    }
+                                ],
+                                "to_if_held_down": [
+                                    {
+                                        "set_variable": {
+                                            "name": "mouse_extra_held_down",
+                                            "value": 1
+                                        }
+                                    },
+                                    { "key_code": "mission_control" }
+                                ],
                                 "type": "basic"
                             },
                             {
                                 "from": {
-                                    "key_code": "close_bracket",
-                                    "modifiers": {
-                                        "mandatory": ["right_option"],
-                                        "optional": ["any"]
-                                    }
+                                    "key_code": "1",
+                                    "modifiers": { "mandatory": ["fn"] }
                                 },
-                                "to": [{ "key_code": "fastforward" }],
+                                "to": [
+                                    {
+                                        "key_code": "1",
+                                        "modifiers": ["left_control", "left_option", "left_command"]
+                                    }
+                                ],
                                 "type": "basic"
                             },
                             {
                                 "from": {
-                                    "key_code": "open_bracket",
-                                    "modifiers": {
-                                        "mandatory": ["right_option"],
-                                        "optional": ["any"]
-                                    }
+                                    "key_code": "2",
+                                    "modifiers": { "mandatory": ["fn"] }
                                 },
-                                "to": [{ "key_code": "rewind" }],
+                                "to": [
+                                    {
+                                        "key_code": "2",
+                                        "modifiers": ["left_control", "left_option", "left_command"]
+                                    }
+                                ],
                                 "type": "basic"
                             },
                             {
                                 "from": {
-                                    "key_code": "equal_sign",
-                                    "modifiers": {
-                                        "mandatory": ["right_option"],
-                                        "optional": ["any"]
-                                    }
+                                    "key_code": "3",
+                                    "modifiers": { "mandatory": ["fn"] }
                                 },
-                                "to": [{ "key_code": "volume_increment" }],
+                                "to": [
+                                    {
+                                        "key_code": "3",
+                                        "modifiers": ["left_control", "left_option", "left_command"]
+                                    }
+                                ],
                                 "type": "basic"
                             },
                             {
                                 "from": {
-                                    "key_code": "hyphen",
-                                    "modifiers": {
-                                        "mandatory": ["right_option"],
-                                        "optional": ["any"]
-                                    }
+                                    "key_code": "4",
+                                    "modifiers": { "mandatory": ["fn"] }
                                 },
-                                "to": [{ "key_code": "volume_decrement" }],
+                                "to": [
+                                    {
+                                        "key_code": "4",
+                                        "modifiers": ["left_control", "left_option", "left_command"]
+                                    }
+                                ],
                                 "type": "basic"
                             },
+                            {
+                                "from": {
+                                    "key_code": "5",
+                                    "modifiers": { "mandatory": ["fn"] }
+                                },
+                                "to": [
+                                    {
+                                        "key_code": "5",
+                                        "modifiers": ["left_control", "left_option", "left_command"]
+                                    }
+                                ],
+                                "type": "basic"
+                            }
+                        ]
+                    },
+                    {
+                        "description": "fn Mods",
+                        "manipulators": [
                             {
                                 "from": {
                                     "key_code": "0",
                                     "modifiers": {
-                                        "mandatory": ["right_option"],
+                                        "mandatory": ["fn"],
                                         "optional": ["any"]
                                     }
                                 },
@@ -77,7 +288,7 @@
                                 "from": {
                                     "key_code": "9",
                                     "modifiers": {
-                                        "mandatory": ["right_option"],
+                                        "mandatory": ["fn"],
                                         "optional": ["any"]
                                     }
                                 },
@@ -86,41 +297,9 @@
                             },
                             {
                                 "from": {
-                                    "key_code": "period",
+                                    "key_code": "r",
                                     "modifiers": {
-                                        "mandatory": ["right_option"],
-                                        "optional": ["any"]
-                                    }
-                                },
-                                "to": [
-                                    {
-                                        "key_code": "right_arrow",
-                                        "modifiers": ["left_control"]
-                                    }
-                                ],
-                                "type": "basic"
-                            },
-                            {
-                                "from": {
-                                    "key_code": "comma",
-                                    "modifiers": {
-                                        "mandatory": ["right_option"],
-                                        "optional": ["any"]
-                                    }
-                                },
-                                "to": [
-                                    {
-                                        "key_code": "left_arrow",
-                                        "modifiers": ["left_control"]
-                                    }
-                                ],
-                                "type": "basic"
-                            },
-                            {
-                                "from": {
-                                    "key_code": "slash",
-                                    "modifiers": {
-                                        "mandatory": ["right_option"],
+                                        "mandatory": ["fn"],
                                         "optional": ["any"]
                                     }
                                 },
@@ -134,9 +313,9 @@
                             },
                             {
                                 "from": {
-                                    "key_code": "quote",
+                                    "key_code": "w",
                                     "modifiers": {
-                                        "mandatory": ["right_option"],
+                                        "mandatory": ["fn"],
                                         "optional": ["any"]
                                     }
                                 },
@@ -168,27 +347,27 @@
                                     }
                                 ],
                                 "type": "basic"
-                            }
-                        ]
-                    },
-                    {
-                        "description": "Shift-F14 to Paste and Match Style",
-                        "enabled": false,
-                        "manipulators": [
+                            },
                             {
                                 "from": {
-                                    "key_code": "f14",
+                                    "key_code": "f1",
                                     "modifiers": {
-                                        "mandatory": ["shift"],
+                                        "mandatory": ["command"],
                                         "optional": ["any"]
                                     }
                                 },
-                                "to": [
-                                    {
-                                        "key_code": "v",
-                                        "modifiers": ["option", "shift", "command"]
+                                "to": [{ "key_code": "illumination_decrement" }],
+                                "type": "basic"
+                            },
+                            {
+                                "from": {
+                                    "key_code": "f2",
+                                    "modifiers": {
+                                        "mandatory": ["command"],
+                                        "optional": ["any"]
                                     }
-                                ],
+                                },
+                                "to": [{ "key_code": "illumination_increment" }],
                                 "type": "basic"
                             }
                         ]
@@ -273,6 +452,50 @@
                         ]
                     },
                     {
+                        "description": "Orion - Mouse extra button to mission control + space",
+                        "manipulators": [
+                            {
+                                "conditions": [
+                                    {
+                                        "identifiers": [{ "vendor_id": 1578 }],
+                                        "type": "device_if"
+                                    },
+                                    {
+                                        "bundle_identifiers": [
+                                            "^com\\.kagi\\.kagimacOS$"
+                                        ],
+                                        "type": "frontmost_application_if"
+                                    }
+                                ],
+                                "from": { "key_code": "f11" },
+                                "to_after_key_up": [
+                                    {
+                                        "set_variable": {
+                                            "name": "mouse_extra_held_down",
+                                            "value": 0
+                                        }
+                                    }
+                                ],
+                                "to_if_alone": [
+                                    {
+                                        "key_code": "s",
+                                        "modifiers": ["left_command"]
+                                    }
+                                ],
+                                "to_if_held_down": [
+                                    {
+                                        "set_variable": {
+                                            "name": "mouse_extra_held_down",
+                                            "value": 1
+                                        }
+                                    },
+                                    { "key_code": "mission_control" }
+                                ],
+                                "type": "basic"
+                            }
+                        ]
+                    },
+                    {
                         "description": "Finder - Mouse extra button to mission control + space",
                         "manipulators": [
                             {
@@ -297,7 +520,7 @@
                                         }
                                     }
                                 ],
-                                "to_if_alone": [{ "key_code": "mission_control" }],
+                                "to_if_alone": [{ "key_code": "spacebar" }],
                                 "to_if_held_down": [
                                     {
                                         "set_variable": {
@@ -305,7 +528,7 @@
                                             "value": 1
                                         }
                                     },
-                                    { "key_code": "spacebar" }
+                                    { "key_code": "mission_control" }
                                 ],
                                 "type": "basic"
                             }
@@ -338,7 +561,7 @@
                                             "value": 1
                                         }
                                     },
-                                    { "key_code": "left_shift" }
+                                    { "key_code": "mission_control" }
                                 ],
                                 "type": "basic"
                             }
@@ -346,12 +569,23 @@
                     },
                     {
                         "description": "Function keys",
+                        "enabled": false,
                         "manipulators": [
                             {
-                                "from": { "key_code": "f3" },
+                                "from": { "key_code": "f1" },
                                 "to": [
                                     {
-                                        "key_code": "backslash",
+                                        "key_code": "f1",
+                                        "modifiers": ["command", "shift"]
+                                    }
+                                ],
+                                "type": "basic"
+                            },
+                            {
+                                "from": { "key_code": "f2" },
+                                "to": [
+                                    {
+                                        "key_code": "f2",
                                         "modifiers": ["command", "shift"]
                                     }
                                 ],
@@ -401,7 +635,7 @@
                             },
                             {
                                 "from": { "key_code": "f6" },
-                                "to": [{ "shell_command": "osascript '/Users/sameerasandakelum/GIT/config/Menubar.scpt'" }],
+                                "to": [{ "shell_command": "osascript '/Users/sameerasandakelum/dev/menubar-autohide/Menubar.scpt'" }],
                                 "type": "basic"
                             },
                             {
@@ -435,6 +669,7 @@
                     },
                     {
                         "description": "Caps lock and 1234...890-+ to F1..F12",
+                        "enabled": false,
                         "manipulators": [
                             {
                                 "conditions": [
@@ -620,7 +855,23 @@
                     },
                     {
                         "description": "CAPSLOCK + WASD to arrow keys",
+                        "enabled": false,
                         "manipulators": [
+                            {
+                                "conditions": [
+                                    {
+                                        "name": "r_option pressed",
+                                        "type": "variable_if",
+                                        "value": 1
+                                    }
+                                ],
+                                "from": {
+                                    "key_code": "escape",
+                                    "modifiers": { "optional": ["any"] }
+                                },
+                                "to": [{ "key_code": "caps_lock" }],
+                                "type": "basic"
+                            },
                             {
                                 "conditions": [
                                     {
@@ -782,7 +1033,7 @@
                                         }
                                     }
                                 ],
-                                "to_if_alone": [{ "key_code": "caps_lock" }],
+                                "to_if_alone": [{ "key_code": "escape" }],
                                 "type": "basic"
                             }
                         ]
@@ -792,36 +1043,28 @@
             "devices": [
                 {
                     "identifiers": {
-                        "is_keyboard": true,
-                        "product_id": 73,
-                        "vendor_id": 9610
-                    },
-                    "simple_modifications": [
-                        {
-                            "from": { "key_code": "application" },
-                            "to": [{ "key_code": "left_arrow" }]
-                        },
-                        {
-                            "from": { "key_code": "left_command" },
-                            "to": [{ "key_code": "left_option" }]
-                        },
-                        {
-                            "from": { "key_code": "left_option" },
-                            "to": [{ "key_code": "left_command" }]
-                        },
-                        {
-                            "from": { "key_code": "right_control" },
-                            "to": [{ "key_code": "right_arrow" }]
-                        }
-                    ]
-                },
-                {
-                    "identifiers": {
                         "is_pointing_device": true,
                         "product_id": 24584,
                         "vendor_id": 1578
                     },
                     "ignore": false
+                },
+                {
+                    "identifiers": { "is_consumer": true },
+                    "ignore": false
+                },
+                {
+                    "identifiers": { "is_keyboard": true },
+                    "simple_modifications": [
+                        {
+                            "from": { "key_code": "non_us_backslash" },
+                            "to": [{ "key_code": "grave_accent_and_tilde" }]
+                        },
+                        {
+                            "from": { "key_code": "grave_accent_and_tilde" },
+                            "to": [{ "key_code": "left_shift" }]
+                        }
+                    ]
                 }
             ],
             "fn_function_keys": [
@@ -831,7 +1074,8 @@
                 }
             ],
             "name": "Default",
-            "selected": true
+            "selected": true,
+            "virtual_hid_keyboard": { "keyboard_type_v2": "ansi" }
         },
         {
             "complex_modifications": {

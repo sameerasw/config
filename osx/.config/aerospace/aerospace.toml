@@ -46,13 +46,12 @@ default-root-container-orientation = 'auto'
 #                 See:
 #                 https://nikitabobko.github.io/AeroSpace/guide#assign-workspaces-to-monitors
 [gaps]
-    inner.horizontal = 15
-    inner.vertical =   15
-    outer.left =       22
-    outer.bottom =     22
-    # outer.top =        30
-    outer.top =        22
-    outer.right =      22
+    inner.horizontal = 10
+    inner.vertical =   10
+    outer.left =       15
+    outer.bottom =     15
+    outer.top =        15
+    outer.right =      15
 
 # 'main' binding mode declaration
 # See: https://nikitabobko.github.io/AeroSpace/guide#binding-modes
@@ -88,20 +87,19 @@ default-root-container-orientation = 'auto'
     # '''
 
     # See: https://nikitabobko.github.io/AeroSpace/commands#layout
-    alt-slash = 'layout tiles horizontal vertical'
-    alt-comma = 'layout accordion horizontal vertical'
+    alt-g = 'layout tiles horizontal vertical'
+    alt-shift-ctrl-comma = 'layout accordion horizontal vertical'
 
     alt-f = 'fullscreen --no-outer-gaps'
-    alt-g = 'fullscreen'
+    alt-shift-f = 'fullscreen'
+    alt-shift-ctrl-f = 'macos-native-fullscreen'
 
     alt-m = 'exec-and-forget /Users/sameerasandakelum/.config/aerospace/menubar.sh'
 
-    alt-b = 'balance-sizes'
-    
+    alt-r = 'balance-sizes'
+
     alt-shift-backslash = 'enable toggle'
 
-    alt-shift-f = 'macos-native-fullscreen'
-    
     alt-shift-p = 'layout floating tiling'
 
     # See: https://nikitabobko.github.io/AeroSpace/commands#focus
@@ -130,6 +128,8 @@ default-root-container-orientation = 'auto'
     alt-4 = 'workspace 4'
     alt-5 = 'workspace 5'
     alt-6 = 'workspace 6'
+    alt-7 = 'workspace 7'
+    alt-8 = 'workspace 8'
 
     alt-q = 'workspace prev --wrap-around'
     alt-e = 'workspace next --wrap-around'
@@ -143,6 +143,8 @@ default-root-container-orientation = 'auto'
     alt-shift-4 = 'move-node-to-workspace 4'
     alt-shift-5 = 'move-node-to-workspace 5'
     alt-shift-6 = 'move-node-to-workspace 6'
+    alt-shift-7 = 'move-node-to-workspace 7'
+    alt-shift-8 = 'move-node-to-workspace 8'
 
     alt-shift-q = 'move-node-to-workspace prev --wrap-around'
     alt-shift-e = 'move-node-to-workspace next --wrap-around'
@@ -160,7 +162,7 @@ default-root-container-orientation = 'auto'
     alt-tab = 'workspace-back-and-forth'
     # See: https://nikitabobko.github.io/AeroSpace/commands#move-workspace-to-monitor
     alt-shift-tab = 'move-workspace-to-monitor --wrap-around next'
-    
+
 
     # See: https://nikitabobko.github.io/AeroSpace/commands#mode
     alt-shift-esc = 'mode service'
@@ -178,7 +180,7 @@ default-root-container-orientation = 'auto'
 
 
     # Default space
-  
+
 
 
 
@@ -188,35 +190,59 @@ default-root-container-orientation = 'auto'
     run = ['layout floating']
 
     [[on-window-detected]]
-    if.app-id ='com.mitchellh.ghostty'
+    if.app-id ='app.zen-browser.zen'
     run = ['move-node-to-workspace 2']
+
+    [[on-window-detected]]
+    if.app-id ='com.google.antigravity'
+    run = ['move-node-to-workspace 3']
 
     [[on-window-detected]]
     if.app-id ='dev.warp.Warp-Stable'
-    run = ['move-node-to-workspace 2']
-    
-    [[on-window-detected]]
-    if.app-id ='com.microsoft.VSCode'
-    run = ['move-node-to-workspace 2']
-
-    [[on-window-detected]]
-    if.app-id ='net.whatsapp.WhatsApp'
-    run = ['move-node-to-workspace 4']
-
-    [[on-window-detected]]
-    if.app-id ='com.hnc.Discord'
-    run = ['move-node-to-workspace 3']
-
-    [[on-window-detected]]
-    if.app-id ='ru.keepcoder.Telegram'
-    run = ['move-node-to-workspace 3']
-
-    [[on-window-detected]]
-    if.app-id ='com.apple.mail'
     run = ['move-node-to-workspace 5']
 
     [[on-window-detected]]
+    if.app-id ='com.microsoft.VSCode'
+    run = ['move-node-to-workspace 4']
+
+    [[on-window-detected]]
+    if.app-id ='net.whatsapp.WhatsApp'
+    run = ['move-node-to-workspace 1']
+
+    [[on-window-detected]]
+    if.app-id ='com.hnc.Discord'
+    run = ['move-node-to-workspace 6']
+
+    [[on-window-detected]]
+    if.app-id ='ru.keepcoder.Telegram'
+    run = ['move-node-to-workspace 1']
+
+    [[on-window-detected]]
+    if.app-id ='com.apple.mail'
+    run = ['move-node-to-workspace 7']
+
+    [[on-window-detected]]
+    if.app-id ='sameerasw.airsync-mac'
+    run = ['move-node-to-workspace 8']
+
+    [[on-window-detected]]
+    if.app-id ='sameerasw.tasks'
+    run = ['move-node-to-workspace 8']
+
+    [[on-window-detected]]
+    if.app-id ='sameerasw.airsync-mac'
+    run = ['layout floating']
+
+    [[on-window-detected]]
+    if.app-id ='sameerasw.tasks'
+    run = ['layout floating']
+
+    [[on-window-detected]]
     if.app-id ='com.apple.iCal'
+    run = ['move-node-to-workspace 7']
+
+    [[on-window-detected]]
+    if.app-id ='com.apple.finder'
     run = ['move-node-to-workspace 5']
 
     [[on-window-detected]]
@@ -236,10 +262,6 @@ default-root-container-orientation = 'auto'
     run = ['layout floating']
 
     [[on-window-detected]]
-    if.app-id ='sameerasw.AirSyncMac'
-    run = ['layout floating']
-
-    [[on-window-detected]]
     if.window-title-regex-substring= 'Sameera Pixel'
     run = ['layout floating']
 
@@ -253,6 +275,6 @@ default-root-container-orientation = 'auto'
 1 = 'main'                         # Monitor sequence number from left to right. 1-based indexing
 2 = 'main'                       # Main monitor
 3 = 'main'                  # Non-main monitor in case when there are only two monitors
-4 = 'main'                  # Non-main monitor in case when there are only two monitors
 5 = 'main'
-6 = 'secondary'
+7 = 'main'
+8 = 'main'
