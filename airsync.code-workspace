@@ -1,31 +1,19 @@
 {
   "folders": [
     {
-      "path": "../GIT/airsync-mac",
-    },
-    {
-      "path": "../GIT/airsync-android",
-    },
-    {
-      "path": "../GIT/jetpack-common",
-    },
-    {
-      "path": "../GIT/Skills",
-    },
-    {
-      "path": "../GIT/ExceptionReport",
-    },
-    {
       "path": "../GIT/airsync-raycast",
     },
     {
-      "path": "../GIT/NearDrop",
+      "path": "../airsync-android",
     },
     {
-      "path": "../GIT/config",
+      "path": "../airsync-mac",
     },
     {
-      "path": "../GIT/essentials",
+      "path": "../Skills",
+    },
+    {
+      "path": "../jetpack-common",
     },
   ],
   "settings": {},
