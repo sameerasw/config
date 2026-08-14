@@ -410,7 +410,6 @@ action_clean() {
 }
 
 action_build_release() {
-  log_info "Starting Release build in ${C_MUTED}$CONFIG_project_dir${RESET}..."
   cd "$CONFIG_project_dir"
   local gradlew_bin="./gradlew"
   if [[ ! -f "$gradlew_bin" ]]; then
@@ -433,6 +432,45 @@ action_build_release() {
       ;;
   esac
 
+  local cached_pass="$CONFIG_keystore_pass"
+  local alias_name="${CONFIG_keystore_alias:-}"
+
+  # If keystore is configured, ensure we have a valid password BEFORE starting Gradle build
+  if [[ -n "$CONFIG_keystore_file" && -f "$CONFIG_keystore_file" ]]; then
+    local keytool_bin=$(which keytool 2>/dev/null || echo "/usr/bin/keytool")
+    while true; do
+      if [[ -z "$cached_pass" ]]; then
+        echo -en "${C_PRIMARY}Enter Keystore Password for $(basename "$CONFIG_keystore_file"): ${RESET}"
+        read -rs cached_pass
+        echo ""
+      fi
+
+      if [[ -z "$cached_pass" ]]; then
+        log_warn "Password cannot be empty."
+        continue
+      fi
+
+      # Validate password and find alias
+      if [[ -x "$keytool_bin" ]]; then
+        local keytool_out
+        keytool_out=$("$keytool_bin" -list -keystore "$CONFIG_keystore_file" -storepass "$cached_pass" 2>&1)
+        if [[ $? -eq 0 ]]; then
+          if [[ -z "$alias_name" ]]; then
+            alias_name=$(echo "$keytool_out" | grep "PrivateKeyEntry" | head -1 | cut -d',' -f1 | tr -d ' ' || echo "upload")
+            [[ -z "$alias_name" ]] && alias_name="upload"
+          fi
+          break
+        else
+          log_error "Incorrect keystore password for $(basename "$CONFIG_keystore_file")."
+          cached_pass=""
+        fi
+      else
+        break
+      fi
+    done
+  fi
+
+  log_info "Starting Release build in ${C_MUTED}$CONFIG_project_dir${RESET}..."
   local start_time=$(date +%s)
   log_info "Running Gradle task(s): ${BOLD}${tasks[*]}${RESET}..."
   if "$gradlew_bin" "${tasks[@]}" --daemon; then
@@ -441,21 +479,6 @@ action_build_release() {
     log_success "Release build completed in ${BOLD}${duration}s${RESET}!"
     
     local out_dir=""
-    local cached_pass="$CONFIG_keystore_pass"
-
-    # If keystore configured but no password in config, prompt once interactively
-    if [[ -n "$CONFIG_keystore_file" && -f "$CONFIG_keystore_file" && -z "$cached_pass" ]]; then
-      while true; do
-        echo -en "${C_PRIMARY}Enter Keystore Password for $(basename "$CONFIG_keystore_file"): ${RESET}"
-        read -rs cached_pass
-        echo ""
-        if [[ -n "$cached_pass" ]]; then
-          break
-        else
-          log_warn "Password cannot be empty."
-        fi
-      done
-    fi
 
     if [[ "$r_type" == "aab" || "$r_type" == "bundle" || "$r_type" == "both" || "$r_type" == "all" ]]; then
       local out_aab=$(find "$CONFIG_project_dir" -maxdepth 6 -name "*.aab" 2>/dev/null | grep "/build/outputs/bundle/release" | xargs ls -t 2>/dev/null | head -1 || true)
@@ -465,14 +488,6 @@ action_build_release() {
           log_info "Signing release bundle with ${C_ACCENT}$(basename "$CONFIG_keystore_file")${RESET}..."
           local jarsigner_bin=$(which jarsigner 2>/dev/null || echo "/usr/bin/jarsigner")
           if [[ -x "$jarsigner_bin" ]]; then
-            local alias_name="${CONFIG_keystore_alias:-upload}"
-            # Extract first alias from keystore if not specified
-            local keytool_bin=$(which keytool 2>/dev/null || echo "/usr/bin/keytool")
-            if [[ -x "$keytool_bin" && -z "$CONFIG_keystore_alias" ]]; then
-              local first_alias=$("$keytool_bin" -list -keystore "$CONFIG_keystore_file" -storepass "$cached_pass" 2>/dev/null | grep "PrivateKeyEntry" | head -1 | cut -d',' -f1 || echo "")
-              [[ -n "$first_alias" ]] && alias_name="$first_alias"
-            fi
-
             "$jarsigner_bin" -keystore "$CONFIG_keystore_file" \
               -storepass "$cached_pass" \
               ${CONFIG_key_pass:+-keypass "$CONFIG_key_pass"} \
