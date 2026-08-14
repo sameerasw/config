@@ -596,7 +596,9 @@ tokens = [t.strip() for t in re.split(r'[,\\s]+', raw_input) if t.strip()]
 if not tokens:
     sys.exit(0)
 
-# Optional codepoint map cache
+total = len(tokens)
+print(f'\033[90m[INFO] Processing {total} icon(s)...\033[0m')
+
 codepoint_map = {}
 def load_codepoints():
     global codepoint_map
@@ -614,8 +616,8 @@ def load_codepoints():
     except Exception:
         pass
 
-for token in tokens:
-    # Clean token (remove prefix 'rounded_' or suffix '_24' if already typed)
+for idx, token in enumerate(tokens, 1):
+    # Clean token
     clean_name = token.lower()
     clean_name = re.sub(r'^rounded_', '', clean_name)
     clean_name = re.sub(r'(_24px|_24|\.xml|\.svg)$', '', clean_name)
@@ -626,13 +628,11 @@ for token in tokens:
             load_codepoints()
         clean_name = codepoint_map.get(clean_name, clean_name)
 
-    # Target filenames
+    print(f'\033[36m[{idx}/{total}]\033[0m Fetching \033[1m{clean_name}\033[0m...', end=' ', flush=True)
+
     target_filename = f'rounded_{clean_name}_24.xml'
     target_path = os.path.join(drawable_dir, target_filename)
 
-    # URLs to try:
-    # 1. Google Material Symbols Rounded Android Vector XML
-    # 2. Material Symbols Web SVG fallback
     urls_to_try = [
         f'https://raw.githubusercontent.com/google/material-design-icons/master/symbols/android/{clean_name}/materialsymbolsrounded/{clean_name}_24px.xml',
         f'https://raw.githubusercontent.com/google/material-design-icons/master/symbols/android/{clean_name}/materialsymbolsrounded/{clean_name}_wght400_24px.xml',
@@ -651,15 +651,13 @@ for token in tokens:
             continue
 
     if xml_content:
-        # Standardize vector tint and formatting
-        # Ensure tint is present or standard #000000 / white fill
         if 'android:tint=' not in xml_content:
             xml_content = xml_content.replace('<vector ', '<vector\n    android:tint=\"#000000\" ', 1)
         with open(target_path, 'w') as f:
             f.write(xml_content.strip() + '\n')
-        print(f'\033[32m[SUCCESS]\033[0m Added {target_filename} -> {target_path}')
+        print(f'\033[32m[DONE]\033[0m -> \033[90m{target_filename}\033[0m')
     else:
-        print(f'\033[31m[ERROR]\033[0m Could not find Material Symbol for \"{token}\"')
+        print(f'\033[31m[NOT FOUND]\033[0m')
 " "$CONFIG_project_name" "$drawable_dir" "$icon_input"
 }
 
