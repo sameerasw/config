@@ -263,6 +263,7 @@ action_install() {
 
   if adb_cmd install -r -d "$apk_file"; then
     log_success "App installed successfully!"
+    action_launch
   else
     log_error "Installation failed."
     exit 1
@@ -465,6 +466,15 @@ action_optimized_debug() {
   # Create backup
   cp "$gradle_file" "$gradle_file.bak"
 
+  # Trap any exit/interrupt/error to always restore the original file
+  cleanup_optimized_block() {
+    if [[ -f "$gradle_file.bak" ]]; then
+      log_info "Restoring $(basename "$gradle_file") comments..."
+      mv -f "$gradle_file.bak" "$gradle_file" 2>/dev/null || true
+    fi
+  }
+  trap cleanup_optimized_block EXIT INT TERM HUP
+
   # Uncomment the block between "optimized dev build" and "end"
   python3 -c "
 import sys, re
@@ -495,11 +505,9 @@ with open(filepath, 'w') as f:
     action_install || build_failed=1
   fi
 
-  # Restore comment state
-  log_info "Restoring $gradle_file state..."
-  if [[ -f "$gradle_file.bak" ]]; then
-    mv "$gradle_file.bak" "$gradle_file"
-  fi
+  # Explicitly restore and remove trap
+  cleanup_optimized_block
+  trap - EXIT INT TERM HUP
 
   if [[ $build_failed -ne 0 ]]; then
     log_error "Optimized debug build/install encountered errors."
