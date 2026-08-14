@@ -106,10 +106,24 @@ select_project_interactive() {
   echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"
   read -rp "Select project [1-$count] (default 1): " choice
   choice="${choice:-1}"
-  if [[ "$choice" -ge 1 && "$choice" -le "$count" ]]; then
+  if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "$count" ]; then
     CONFIG_FILE="${config_files[$((choice-1))]}"
   else
-    CONFIG_FILE="${config_files[0]}"
+    # Try fuzzy matching project name or default to first
+    local matched=false
+    for cfg in "${config_files[@]}"; do
+      local p_name=$(grep -E "^[[:space:]]*project_name[[:space:]]*=" "$cfg" 2>/dev/null | head -1 | cut -d'=' -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || basename "$cfg" .android.config)
+      if [[ "${p_name:0:1}" == "${choice:0:1}" || "${p_name,,}" == *"${choice,,}"* ]]; then
+        CONFIG_FILE="$cfg"
+        matched=true
+        break
+      fi
+    done
+    if [[ "$matched" != "true" ]]; then
+      log_warn "Invalid selection '$choice'. Defaulting to [1] $(basename "${config_files[0]}" .android.config)..."
+      sleep 1
+      CONFIG_FILE="${config_files[0]}"
+    fi
   fi
 }
 
@@ -231,9 +245,11 @@ select_device() {
 
     read -rp "Select device [1-$count] (default 1): " choice
     choice="${choice:-1}"
-    if [[ "$choice" -ge 1 && "$choice" -le "$count" ]]; then
+    if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "$count" ]; then
       picked_dev="${dev_arr[$((choice-1))]}"
     else
+      log_warn "Invalid selection '$choice'. Defaulting to [1] ${dev_arr[0]}..."
+      sleep 1
       picked_dev="${dev_arr[0]}"
     fi
   fi
