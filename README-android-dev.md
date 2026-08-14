@@ -35,6 +35,7 @@ android-build
   [G] Gradle Sync
   [C] Clean build
   [B] Release build
+  [Y] Import icons
 
   [W] Wireless ADB
   [D] Switch Device
@@ -62,6 +63,7 @@ android-build
 | `G` / `sync` | Run Gradle sync & daemon check | `android-build sync` |
 | `C` / `clean` | Run `./gradlew clean` + stop daemons | `android-build clean` |
 | `B` / `release` | Build production release artifacts based on `release_type` | `android-build release` |
+| `Y` / `icons` | Download & add Material Symbols vector drawables | `android-build icons` |
 | `W` / `wifi` | Pair and connect via Wireless ADB | `android-build wifi` |
 | `D` / `devices`| Switch/list connected ADB devices | `android-build devices` |
 | `P` / `project`| Switch active project | `android-build project` |
@@ -69,23 +71,11 @@ android-build
 
 ---
 
-## Configuration Properties (`.android.config`)
+## Adding Material Icons (`[Y]` / `icons`)
 
-```ini
-# Project Information
-project_name=Essentials
-project_dir=/Users/sameerasandakelum/GIT/essentials
-workspace_file=/Users/sameerasandakelum/GIT/config/essentials.code-workspace
-package_name=com.sameerasw.essentials
-main_activity=.MainActivity
+Supports single or batch imports from:
+- **Icon Names**: `device_thermostat`, `speed`, `bluetooth_searching`
+- **Hex Codepoints**: `e1ff` (automatically resolves to icon name)
+- **Batch list**: `device_thermostat, search, settings, wifi` (comma or space separated)
 
-# Development Builds
-gradle_task=assembleDebug
-build_variant=debug
-
-# Release Builds: 'apk' (assembleRelease), 'aab' (bundleRelease), or 'both'
-release_type=apk
-
-# Target Device Serial (optional)
-target_device=46121FDAP004D9
-```
+Saved automatically with project standard naming: `app/src/main/res/drawable/rounded_<name>_24.xml`.

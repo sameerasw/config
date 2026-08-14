@@ -441,6 +441,22 @@ action_build_release() {
     log_success "Release build completed in ${BOLD}${duration}s${RESET}!"
     
     local out_dir=""
+    local cached_pass="$CONFIG_keystore_pass"
+
+    # If keystore configured but no password in config, prompt once interactively
+    if [[ -n "$CONFIG_keystore_file" && -f "$CONFIG_keystore_file" && -z "$cached_pass" ]]; then
+      while true; do
+        echo -en "${C_PRIMARY}Enter Keystore Password for $(basename "$CONFIG_keystore_file"): ${RESET}"
+        read -rs cached_pass
+        echo ""
+        if [[ -n "$cached_pass" ]]; then
+          break
+        else
+          log_warn "Password cannot be empty."
+        fi
+      done
+    fi
+
     if [[ "$r_type" == "aab" || "$r_type" == "bundle" || "$r_type" == "both" || "$r_type" == "all" ]]; then
       local out_aab=$(find "$CONFIG_project_dir" -maxdepth 6 -name "*.aab" 2>/dev/null | grep "/build/outputs/bundle/release" | xargs ls -t 2>/dev/null | head -1 || true)
       if [[ -n "$out_aab" ]]; then
@@ -449,11 +465,18 @@ action_build_release() {
           log_info "Signing release bundle with ${C_ACCENT}$(basename "$CONFIG_keystore_file")${RESET}..."
           local jarsigner_bin=$(which jarsigner 2>/dev/null || echo "/usr/bin/jarsigner")
           if [[ -x "$jarsigner_bin" ]]; then
+            local alias_name="${CONFIG_keystore_alias:-upload}"
+            # Extract first alias from keystore if not specified
+            local keytool_bin=$(which keytool 2>/dev/null || echo "/usr/bin/keytool")
+            if [[ -x "$keytool_bin" && -z "$CONFIG_keystore_alias" ]]; then
+              local first_alias=$("$keytool_bin" -list -keystore "$CONFIG_keystore_file" -storepass "$cached_pass" 2>/dev/null | grep "PrivateKeyEntry" | head -1 | cut -d',' -f1 || echo "")
+              [[ -n "$first_alias" ]] && alias_name="$first_alias"
+            fi
+
             "$jarsigner_bin" -keystore "$CONFIG_keystore_file" \
-              ${CONFIG_keystore_pass:+-storepass "$CONFIG_keystore_pass"} \
+              -storepass "$cached_pass" \
               ${CONFIG_key_pass:+-keypass "$CONFIG_key_pass"} \
-              "$out_aab" "${CONFIG_keystore_alias:-upload}" >/dev/null 2>&1 || \
-            "$jarsigner_bin" -keystore "$CONFIG_keystore_file" "$out_aab" upload 2>/dev/null || true
+              "$out_aab" "$alias_name" >/dev/null 2>&1 || true
             log_success "Release Bundle signed."
           fi
         fi
@@ -488,42 +511,23 @@ action_build_release() {
           rm -f "$temp_signed_apk"
           local sign_success=0
 
-          if [[ -n "$CONFIG_keystore_pass" ]]; then
+          while [[ $sign_success -eq 0 ]]; do
             if "$apksigner_bin" sign --ks "$CONFIG_keystore_file" \
-                --ks-pass "pass:$CONFIG_keystore_pass" \
+                --ks-pass "pass:$cached_pass" \
                 ${CONFIG_keystore_alias:+--ks-key-alias "$CONFIG_keystore_alias"} \
                 ${CONFIG_key_pass:+--key-pass "pass:$CONFIG_key_pass"} \
                 --out "$temp_signed_apk" "$raw_apk" >/dev/null 2>&1; then
               sign_success=1
-            fi
-          fi
-
-          # If not signed via config pass, prompt with retry loop
-          while [[ $sign_success -eq 0 ]]; do
-            echo -en "${C_PRIMARY}Enter Keystore Password for $(basename "$CONFIG_keystore_file"): ${RESET}"
-            read -rs entered_pass
-            echo ""
-
-            if [[ -z "$entered_pass" ]]; then
-              log_warn "Password cannot be empty."
-              continue
-            fi
-
-            local sign_output
-            sign_output=$("$apksigner_bin" sign --ks "$CONFIG_keystore_file" \
-              --ks-pass "pass:$entered_pass" \
-              ${CONFIG_keystore_alias:+--ks-key-alias "$CONFIG_keystore_alias"} \
-              --out "$temp_signed_apk" "$raw_apk" 2>&1) && sign_success=1
-
-            if [[ $sign_success -eq 1 && -f "$temp_signed_apk" ]]; then
               break
             else
-              log_error "Incorrect password or signing failed. Try again."
+              log_error "Incorrect password or signing failed."
+              echo -en "${C_PRIMARY}Enter Keystore Password for $(basename "$CONFIG_keystore_file"): ${RESET}"
+              read -rs cached_pass
+              echo ""
             fi
           done
 
           if [[ $sign_success -eq 1 && -f "$temp_signed_apk" ]]; then
-            # Move to clean app-release.apk name and delete intermediate artifacts
             rm -f "$apk_dir/app-release-aligned.tmp.apk"
             rm -f "$apk_dir/app-release-unsigned.apk"
             rm -f "$final_target_apk"
@@ -553,6 +557,110 @@ action_build_release() {
     log_error "Release build failed."
     return 1
   fi
+}
+
+action_import_icons() {
+  local p_dir="$CONFIG_project_dir"
+  local drawable_dir=""
+  for candidate in "$p_dir/app/src/main/res/drawable" "$p_dir/src/main/res/drawable" "$p_dir/res/drawable"; do
+    if [[ -d "$candidate" ]]; then
+      drawable_dir="$candidate"
+      break
+    fi
+  done
+
+  if [[ -z "$drawable_dir" ]]; then
+    log_error "Could not locate 'res/drawable' directory in $p_dir!"
+    return 1
+  fi
+
+  echo -e "\n${BOLD}${C_PRIMARY}=== Add Material Drawable Icons ===${RESET}"
+  echo -e "${C_MUTED}Enter icon name(s) (comma or space separated, e.g. 'device_thermostat, speed, search' or 'e1ff'):${RESET}"
+  read -rp "> " icon_input
+
+  if [[ -z "$icon_input" ]]; then
+    log_warn "No icon names provided."
+    return 0
+  fi
+
+  python3 -c "
+import sys, os, re, urllib.request, json
+
+project_name = sys.argv[1]
+drawable_dir = sys.argv[2]
+raw_input = sys.argv[3]
+
+# Split input by comma or whitespace
+tokens = [t.strip() for t in re.split(r'[,\\s]+', raw_input) if t.strip()]
+
+if not tokens:
+    sys.exit(0)
+
+# Optional codepoint map cache
+codepoint_map = {}
+def load_codepoints():
+    global codepoint_map
+    try:
+        req = urllib.request.Request('https://fonts.google.com/metadata/icons', headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            content = resp.read().decode('utf-8')
+            if content.startswith(\")]}'\"):
+                content = content[4:].strip()
+            data = json.loads(content)
+            for item in data.get('icons', []):
+                cp_hex = format(item.get('codepoint', 0), 'x').lower()
+                codepoint_map[cp_hex] = item.get('name')
+                codepoint_map[item.get('name')] = item.get('name')
+    except Exception:
+        pass
+
+for token in tokens:
+    # Clean token (remove prefix 'rounded_' or suffix '_24' if already typed)
+    clean_name = token.lower()
+    clean_name = re.sub(r'^rounded_', '', clean_name)
+    clean_name = re.sub(r'(_24px|_24|\.xml|\.svg)$', '', clean_name)
+
+    # Check if token is hex codepoint (e.g. e1ff)
+    if re.match(r'^[0-9a-f]{4,5}$', clean_name):
+        if not codepoint_map:
+            load_codepoints()
+        clean_name = codepoint_map.get(clean_name, clean_name)
+
+    # Target filenames
+    target_filename = f'rounded_{clean_name}_24.xml'
+    target_path = os.path.join(drawable_dir, target_filename)
+
+    # URLs to try:
+    # 1. Google Material Symbols Rounded Android Vector XML
+    # 2. Material Symbols Web SVG fallback
+    urls_to_try = [
+        f'https://raw.githubusercontent.com/google/material-design-icons/master/symbols/android/{clean_name}/materialsymbolsrounded/{clean_name}_24px.xml',
+        f'https://raw.githubusercontent.com/google/material-design-icons/master/symbols/android/{clean_name}/materialsymbolsrounded/{clean_name}_wght400_24px.xml',
+        f'https://raw.githubusercontent.com/google/material-design-icons/master/src/{clean_name}/materialiconsround/24px.xml',
+    ]
+
+    xml_content = None
+    for url in urls_to_try:
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.status == 200:
+                    xml_content = resp.read().decode('utf-8')
+                    break
+        except Exception:
+            continue
+
+    if xml_content:
+        # Standardize vector tint and formatting
+        # Ensure tint is present or standard #000000 / white fill
+        if 'android:tint=' not in xml_content:
+            xml_content = xml_content.replace('<vector ', '<vector\n    android:tint=\"#000000\" ', 1)
+        with open(target_path, 'w') as f:
+            f.write(xml_content.strip() + '\n')
+        print(f'\033[32m[SUCCESS]\033[0m Added {target_filename} -> {target_path}')
+    else:
+        print(f'\033[31m[ERROR]\033[0m Could not find Material Symbol for \"{token}\"')
+" "$CONFIG_project_name" "$drawable_dir" "$icon_input"
 }
 
 action_uninstall() {
@@ -850,6 +958,7 @@ show_dashboard() {
     echo -e "  ${BOLD}[G]${RESET} Gradle Sync"
     echo -e "  ${BOLD}[C]${RESET} Clean build"
     echo -e "  ${BOLD}[B]${RESET} Release build"
+    echo -e "  ${BOLD}[Y]${RESET} Import icons"
     echo ""
 
     # Section 4: Device & Project
@@ -881,6 +990,7 @@ show_dashboard() {
       g|G) echo ""; action_sync; read -rp "Press Enter to return..." ;;
       c|C|6) echo ""; action_clean; read -rp "Press Enter to return..." ;;
       b|B) echo ""; action_build_release; read -rp "Press Enter to return..." ;;
+      y|Y) echo ""; action_import_icons; read -rp "Press Enter to return..." ;;
       w|W|8) echo ""; action_wireless_connect; read -rp "Press Enter to return..." ;;
       d|D) select_device "true" ;;
       p|P)
@@ -909,6 +1019,7 @@ show_help() {
   echo -e "  start (S)           Launch main activity"
   echo -e "  clean (C)           Run Gradle clean & stop daemons"
   echo -e "  release (B)         Build release bundle / APK"
+  echo -e "  icons (Y)           Import Material Symbols drawables"
   echo -e "  mirror (M)          Launch scrcpy screen mirroring"
   echo -e "  sync (G)            Run Gradle sync & daemon check"
   echo -e "  wifi (W)            Wireless ADB connection helper"
@@ -920,6 +1031,7 @@ show_help() {
   echo -e "  $0                                   # Interactive menu"
   echo -e "  $0 run essentials.android.config     # Complete run for Essentials"
   echo -e "  $0 opt essentials.android.config     # Optimized debug build & install"
+  echo -e "  $0 icons                             # Download & add drawables"
   echo -e "  $0 clean                             # Gradle clean & daemon restart"
   echo -e "  $0 release essentials.android.config # Build release bundle"
   echo -e "  $0 logs airsync.android.config       # Live logs for AirSync"
@@ -940,7 +1052,7 @@ while [[ $# -gt 0 ]]; do
       show_help
       exit 0
       ;;
-    run|build|install|opt|optimized|sync|clean|release|bundle|launch|restart|stop|uninstall|logs|mirror|devices|wifi|editor|open)
+    run|build|install|opt|optimized|sync|clean|release|bundle|icons|icon|launch|restart|stop|uninstall|logs|mirror|devices|wifi|editor|open)
       SUBCOMMAND="$1"
       shift
       ;;
@@ -984,6 +1096,9 @@ case "${SUBCOMMAND:-}" in
     ;;
   release|bundle)
     action_build_release
+    ;;
+  icons|icon)
+    action_import_icons
     ;;
   launch|start)
     action_launch
