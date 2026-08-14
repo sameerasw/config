@@ -472,19 +472,20 @@ action_build_release() {
         local zipalign_bin=$(find "$HOME/Library/Android/sdk/build-tools" -name "zipalign" 2>/dev/null | sort -V | tail -1 || true)
         
         local apk_dir=$(dirname "$raw_apk")
-        local signed_apk="$apk_dir/app-release-signed.apk"
+        local final_target_apk="$apk_dir/app-release.apk"
+        local temp_signed_apk="$apk_dir/app-release-signed.tmp.apk"
 
         log_info "Signing release APK with ${C_ACCENT}$(basename "$CONFIG_keystore_file")${RESET}..."
 
         if [[ -n "$zipalign_bin" && -x "$zipalign_bin" && "$raw_apk" == *"-unsigned.apk" ]]; then
-          local aligned_apk="$apk_dir/app-release-aligned.apk"
+          local aligned_apk="$apk_dir/app-release-aligned.tmp.apk"
           rm -f "$aligned_apk"
           "$zipalign_bin" -p -f -v 4 "$raw_apk" "$aligned_apk" >/dev/null 2>&1 || cp "$raw_apk" "$aligned_apk"
           raw_apk="$aligned_apk"
         fi
 
         if [[ -n "$apksigner_bin" && -x "$apksigner_bin" ]]; then
-          rm -f "$signed_apk"
+          rm -f "$temp_signed_apk"
           local sign_success=0
 
           if [[ -n "$CONFIG_keystore_pass" ]]; then
@@ -492,7 +493,7 @@ action_build_release() {
                 --ks-pass "pass:$CONFIG_keystore_pass" \
                 ${CONFIG_keystore_alias:+--ks-key-alias "$CONFIG_keystore_alias"} \
                 ${CONFIG_key_pass:+--key-pass "pass:$CONFIG_key_pass"} \
-                --out "$signed_apk" "$raw_apk" >/dev/null 2>&1; then
+                --out "$temp_signed_apk" "$raw_apk" >/dev/null 2>&1; then
               sign_success=1
             fi
           fi
@@ -512,20 +513,22 @@ action_build_release() {
             sign_output=$("$apksigner_bin" sign --ks "$CONFIG_keystore_file" \
               --ks-pass "pass:$entered_pass" \
               ${CONFIG_keystore_alias:+--ks-key-alias "$CONFIG_keystore_alias"} \
-              --out "$signed_apk" "$raw_apk" 2>&1) && sign_success=1
+              --out "$temp_signed_apk" "$raw_apk" 2>&1) && sign_success=1
 
-            if [[ $sign_success -eq 1 && -f "$signed_apk" ]]; then
+            if [[ $sign_success -eq 1 && -f "$temp_signed_apk" ]]; then
               break
             else
               log_error "Incorrect password or signing failed. Try again."
             fi
           done
 
-          if [[ $sign_success -eq 1 && -f "$signed_apk" ]]; then
-            final_apk="$signed_apk"
-            # Cleanup intermediate and unsigned files
-            rm -f "$apk_dir/app-release-aligned.apk"
+          if [[ $sign_success -eq 1 && -f "$temp_signed_apk" ]]; then
+            # Move to clean app-release.apk name and delete intermediate artifacts
+            rm -f "$apk_dir/app-release-aligned.tmp.apk"
             rm -f "$apk_dir/app-release-unsigned.apk"
+            rm -f "$final_target_apk"
+            mv "$temp_signed_apk" "$final_target_apk"
+            final_apk="$final_target_apk"
             log_success "Release APK signed successfully."
           fi
         else
