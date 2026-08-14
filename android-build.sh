@@ -617,17 +617,46 @@ action_wireless_connect() {
   fi
 }
 
+# Helper to extract live project info for dashboard
+get_project_details() {
+  local p_dir="$CONFIG_project_dir"
+  PROJECT_GIT_BRANCH=""
+  PROJECT_SDK=""
+  PROJECT_VERSION=""
+
+  if [[ -d "$p_dir/.git" ]]; then
+    PROJECT_GIT_BRANCH=$(git -C "$p_dir" branch --show-current 2>/dev/null || echo "")
+  fi
+
+  local gradle_file=$(find_app_gradle_file)
+  if [[ -n "$gradle_file" && -f "$gradle_file" ]]; then
+    local compile_sdk=$(grep -E "compileSdk[[:space:]]*=[[:space:]]*[0-9]+" "$gradle_file" | head -1 | grep -oE "[0-9]+" || echo "")
+    local v_name=$(grep -E "versionName[[:space:]]*=[[:space:]]*\"" "$gradle_file" | head -1 | sed 's/.*"\(.*\)".*/\1/' || echo "")
+    local v_code=$(grep -E "versionCode[[:space:]]*=[[:space:]]*[0-9]+" "$gradle_file" | head -1 | grep -oE "[0-9]+" || echo "")
+    
+    [[ -n "$compile_sdk" ]] && PROJECT_SDK="SDK $compile_sdk"
+    if [[ -n "$v_name" ]]; then
+      PROJECT_VERSION="v$v_name"
+      [[ -n "$v_code" ]] && PROJECT_VERSION="$PROJECT_VERSION ($v_code)"
+    fi
+  fi
+}
+
 # --- Interactive TUI Dashboard ---
 show_dashboard() {
   select_device
   while true; do
+    get_project_details
     clear
     echo -e "${BOLD}${C_PRIMARY}android-build${RESET}"
     echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"
-    echo -e "  ${BOLD}Project:${RESET}   ${C_ACCENT}${CONFIG_project_name}${RESET}"
+    echo -e "  ${BOLD}Project:${RESET}   ${C_ACCENT}${CONFIG_project_name}${RESET} ${C_MUTED}${PROJECT_VERSION}${RESET}"
     echo -e "  ${BOLD}Package:${RESET}   ${C_PRIMARY}${CONFIG_package_name}${RESET}"
+    if [[ -n "$PROJECT_GIT_BRANCH" || -n "$PROJECT_SDK" ]]; then
+      echo -e "  ${BOLD}Branch:${RESET}    ${C_SUCCESS}${PROJECT_GIT_BRANCH:-main}${RESET}  ${C_MUTED}${PROJECT_SDK}${RESET}"
+    fi
     echo -e "  ${BOLD}Device:${RESET}    ${C_SUCCESS}${SELECTED_DEVICE}${RESET}"
-    echo -e "  ${BOLD}Task:${RESET}      ${C_WARN}${CONFIG_gradle_task}${RESET}"
+    echo -e "  ${BOLD}Task:${RESET}      ${C_WARN}${CONFIG_gradle_task}${RESET} [${CONFIG_build_variant}]"
     echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"
     
     # Section 1: Build & Run
@@ -650,9 +679,10 @@ show_dashboard() {
     echo -e "  ${BOLD}[G]${RESET} Gradle Sync"
     echo ""
 
-    # Section 4: Device
+    # Section 4: Device & Project
     echo -e "  ${BOLD}[W]${RESET} Wireless ADB"
     echo -e "  ${BOLD}[D]${RESET} Switch Device"
+    echo -e "  ${BOLD}[P]${RESET} Switch Project"
     echo ""
 
     # Section 5: Editor & Quit
@@ -692,6 +722,11 @@ show_dashboard() {
       g|G) echo ""; action_sync; read -rp "Press Enter to return..." ;;
       w|W|8) echo ""; action_wireless_connect; read -rp "Press Enter to return..." ;;
       d|D) select_device "true" ;;
+      p|P)
+        select_project_interactive
+        load_config "${CONFIG_FILE:-}"
+        select_device
+        ;;
       e|E) action_open_editor; sleep 1 ;;
       q|Q) exit 0 ;;
       *) log_warn "Invalid option." ; sleep 1 ;;
@@ -716,6 +751,7 @@ show_help() {
   echo -e "  sync (G)            Run Gradle sync & daemon check"
   echo -e "  wifi (W)            Wireless ADB connection helper"
   echo -e "  devices (D)         List connected devices"
+  echo -e "  project (P)         Switch active project"
   echo -e "  editor (E)          Open workspace / project in Antigravity IDE"
   echo -e "  help                Show this help message\n"
   echo -e "${BOLD}Examples:${RESET}"

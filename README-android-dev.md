@@ -15,9 +15,9 @@ alias android-build="/Users/sameerasandakelum/GIT/config/android-build.sh"
 ## Usage
 
 ### Interactive Menu
-- **If run anywhere (e.g. `android-build` or `./android-build.sh`) without arguments**:
-  - If inside an Android repository directory $\to$ auto-detects that project.
-  - If in an arbitrary directory $\to$ automatically scans for available projects (`*.android.config`) and renders a clean picker:
+- **If run anywhere without arguments (`android-build` or `./android-build.sh`)**:
+  - Inside an Android project $\to$ auto-detects and loads that project.
+  - Outside an Android project $\to$ prompts with an interactive project picker:
     ```text
     android-build
     ──────────────────────────────────────────────────
@@ -35,10 +35,11 @@ alias android-build="/Users/sameerasandakelum/GIT/config/android-build.sh"
 ```text
 android-build
 ──────────────────────────────────────────────────
-  Project:   Essentials
+  Project:   Essentials v17.1 (60)
   Package:   com.sameerasw.essentials
+  Branch:    main  SDK 37
   Device:    46121FDAP004D9
-  Task:      assembleDebug
+  Task:      assembleDebug [debug]
 ──────────────────────────────────────────────────
   [R] Run & Debug
   [I] Install only
@@ -54,6 +55,7 @@ android-build
 
   [W] Wireless ADB
   [D] Switch Device
+  [P] Switch Project
 
   [E] Open in editor
   [Q] Quit
@@ -61,7 +63,7 @@ android-build
 > 
 ```
 
-> **Hidden combo**: Typing `FC` will force-stop the app, clear data/cache (with confirmation prompt), and immediately auto re-launch it.
+> **Hidden combo**: Typing `FC` will force-stop the app, prompt to clear data/cache, and immediately auto re-launch it.
 
 ---
 
@@ -80,5 +82,6 @@ android-build
 | `G` / `sync` | Run Gradle sync & daemon check | `android-build sync` |
 | `W` / `wifi` | Pair and connect via Wireless ADB | `android-build wifi` |
 | `D` / `devices`| Switch/list connected ADB devices | `android-build devices` |
+| `P` / `project`| Switch active project | `android-build project` |
 | `E` / `editor` | Open workspace file or project in Antigravity IDE | `android-build editor` |
 | `FC` *(menu only)*| Force-stop, clear data, and auto re-launch | |
