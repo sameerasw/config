@@ -1,34 +1,13 @@
 {
   "folders": [
     {
-      "path": "../GIT/essentials",
+      "path": "../essentials",
     },
     {
-      "path": "../GIT/Schedule",
+      "path": "../essentials.wiki",
     },
     {
-      "path": "../GIT/jetpack-common",
-    },
-    {
-      "path": "../GIT/Day",
-    },
-    {
-      "path": "../GIT/sameerasw.com",
-    },
-    {
-      "path": "../GIT/new-tab-with-bookmarks",
-    },
-    {
-      "path": "../GIT/airsync-android",
-    },
-    {
-      "path": "../GIT/Ambience",
-    },
-    {
-      "path": "../GIT/essentials.wiki",
-    },
-    {
-      "path": "../GIT/airsync-mac",
+      "path": "../jetpack-common",
     },
   ],
   "settings": {},
