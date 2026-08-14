@@ -678,6 +678,84 @@ for idx, token in enumerate(tokens, 1):
 " "$CONFIG_project_name" "$drawable_dir" "$icon_input"
 }
 
+ensure_ktlint() {
+  local cache_dir="$HOME/.cache/android-build"
+  local ktlint_bin="$cache_dir/ktlint"
+
+  if command -v ktlint >/dev/null 2>&1; then
+    echo "$(command -v ktlint)"
+    return 0
+  fi
+
+  if [[ -x "$ktlint_bin" ]]; then
+    echo "$ktlint_bin"
+    return 0
+  fi
+
+  mkdir -p "$cache_dir"
+  log_info "Downloading standalone 'ktlint' binary for Kotlin formatting..."
+  local ktlint_url="https://github.com/pinterest/ktlint/releases/download/1.5.0/ktlint"
+  if curl -sSL "$ktlint_url" -o "$ktlint_bin" && chmod +x "$ktlint_bin"; then
+    log_success "ktlint installed to $ktlint_bin"
+    echo "$ktlint_bin"
+    return 0
+  else
+    log_error "Failed to download ktlint. You can install it via 'brew install ktlint'."
+    return 1
+  fi
+}
+
+action_format_code() {
+  local ktlint_exe
+  ktlint_exe=$(ensure_ktlint) || return 1
+
+  echo -e "\n${BOLD}${C_PRIMARY}=== Format & Optimize Kotlin Code ===${RESET}"
+  echo -e "  ${BOLD}[1]${RESET} Modified files only (Git diff - fast)"
+  echo -e "  ${BOLD}[2]${RESET} Entire project"
+  echo -e "  ${BOLD}[3]${RESET} Specific directory or file"
+  echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"
+  read -rp "Select scope [1-3] (default 1): " f_choice
+  f_choice="${f_choice:-1}"
+
+  cd "$CONFIG_project_dir"
+
+  case "$f_choice" in
+    1)
+      local mod_files=()
+      while IFS= read -r f; do
+        [[ "$f" =~ \.(kt|kts)$ ]] && [[ -f "$CONFIG_project_dir/$f" ]] && mod_files+=("$CONFIG_project_dir/$f")
+      done < <(git -C "$CONFIG_project_dir" status --porcelain 2>/dev/null | awk '{print $2}' || true)
+
+      if [[ ${#mod_files[@]} -eq 0 ]]; then
+        log_info "No modified Kotlin files to format."
+        return 0
+      fi
+
+      log_info "Formatting ${#mod_files[@]} modified Kotlin file(s)..."
+      "$ktlint_exe" --format "${mod_files[@]}" || true
+      log_success "Format complete."
+      ;;
+    2)
+      log_info "Formatting all Kotlin files in $CONFIG_project_name..."
+      "$ktlint_exe" --format "**/src/**/*.kt" "**/*.kts" "!**/build/**" "!**/.gradle/**" || true
+      log_success "Entire project formatted."
+      ;;
+    3)
+      read -rp "Enter relative directory or file path: " target_input
+      if [[ -n "$target_input" && -e "$CONFIG_project_dir/$target_input" ]]; then
+        log_info "Formatting '$target_input'..."
+        "$ktlint_exe" --format "$CONFIG_project_dir/$target_input" || true
+        log_success "Format complete."
+      else
+        log_warn "Path '$target_input' not found in project."
+      fi
+      ;;
+    *)
+      log_warn "Invalid input."
+      ;;
+  esac
+}
+
 action_uninstall() {
   select_device
   log_warn "Uninstalling ${BOLD}$CONFIG_package_name${RESET} from $SELECTED_DEVICE..."
@@ -971,6 +1049,7 @@ show_dashboard() {
     # Section 3: Tools & Builds
     echo -e "  ${BOLD}[M]${RESET} Mirror"
     echo -e "  ${BOLD}[G]${RESET} Gradle Sync"
+    echo -e "  ${BOLD}[T]${RESET} Format code"
     echo -e "  ${BOLD}[C]${RESET} Clean build"
     echo -e "  ${BOLD}[B]${RESET} Release build"
     echo -e "  ${BOLD}[Y]${RESET} Import icons"
@@ -1003,6 +1082,7 @@ show_dashboard() {
       s|S|4) echo ""; action_launch; sleep 1 ;;
       m|M|7) echo ""; action_mirror; sleep 1 ;;
       g|G) echo ""; action_sync; read -rp "Press Enter to return..." ;;
+      t|T) echo ""; action_format_code; read -rp "Press Enter to return..." ;;
       c|C|6) echo ""; action_clean; read -rp "Press Enter to return..." ;;
       b|B) echo ""; action_build_release; read -rp "Press Enter to return..." ;;
       y|Y) echo ""; action_import_icons; read -rp "Press Enter to return..." ;;
@@ -1032,6 +1112,7 @@ show_help() {
   echo -e "  logs (L)            Stream colored logcat filtered by package PID"
   echo -e "  stop (F)            Force stop the application"
   echo -e "  start (S)           Launch main activity"
+  echo -e "  format (T)          Format Kotlin code & optimize imports"
   echo -e "  clean (C)           Run Gradle clean & stop daemons"
   echo -e "  release (B)         Build release bundle / APK"
   echo -e "  icons (Y)           Import Material Symbols drawables"
@@ -1046,6 +1127,7 @@ show_help() {
   echo -e "  $0                                   # Interactive menu"
   echo -e "  $0 run essentials.android.config     # Complete run for Essentials"
   echo -e "  $0 opt essentials.android.config     # Optimized debug build & install"
+  echo -e "  $0 format                            # Format & optimize Kotlin code"
   echo -e "  $0 icons                             # Download & add drawables"
   echo -e "  $0 clean                             # Gradle clean & daemon restart"
   echo -e "  $0 release essentials.android.config # Build release bundle"
@@ -1067,7 +1149,7 @@ while [[ $# -gt 0 ]]; do
       show_help
       exit 0
       ;;
-    run|build|install|opt|optimized|sync|clean|release|bundle|icons|icon|launch|restart|stop|uninstall|logs|mirror|devices|wifi|editor|open)
+    run|build|install|opt|optimized|sync|format|fmt|clean|release|bundle|icons|icon|launch|restart|stop|uninstall|logs|mirror|devices|wifi|editor|open)
       SUBCOMMAND="$1"
       shift
       ;;
@@ -1105,6 +1187,9 @@ case "${SUBCOMMAND:-}" in
     ;;
   sync)
     action_sync
+    ;;
+  format|fmt)
+    action_format_code
     ;;
   clean)
     action_clean

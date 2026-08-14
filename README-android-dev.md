@@ -19,7 +19,7 @@ android-build
 ──────────────────────────────────────────────────
   Project:   Essentials v17.1 (60)
   Package:   com.sameerasw.essentials
-  Branch:    main  SDK 37
+  Branch:    develop  SDK 37
   Device:    46121FDAP004D9
   Task:      assembleDebug [debug]
 ──────────────────────────────────────────────────
@@ -33,6 +33,7 @@ android-build
 
   [M] Mirror
   [G] Gradle Sync
+  [T] Format code
   [C] Clean build
   [B] Release build
   [Y] Import icons
@@ -61,6 +62,7 @@ android-build
 | `S` / `start` | Start/Launch main activity | `android-build start` |
 | `M` / `mirror` | Open `scrcpy` window for active device | `android-build mirror` |
 | `G` / `sync` | Run Gradle sync & daemon check | `android-build sync` |
+| `T` / `format` | Format Kotlin code & optimize imports | `android-build format` |
 | `C` / `clean` | Run `./gradlew clean` + stop daemons | `android-build clean` |
 | `B` / `release` | Build production release artifacts based on `release_type` | `android-build release` |
 | `Y` / `icons` | Download & add Material Symbols vector drawables | `android-build icons` |
@@ -71,11 +73,9 @@ android-build
 
 ---
 
-## Adding Material Icons (`[Y]` / `icons`)
+## Kotlin Code Formatting (`[T]` / `format`)
 
-Supports single or batch imports from:
-- **Icon Names**: `device_thermostat`, `speed`, `bluetooth_searching`
-- **Hex Codepoints**: `e1ff` (automatically resolves to icon name)
-- **Batch list**: `device_thermostat, search, settings, wifi` (comma or space separated)
-
-Saved automatically with project standard naming: `app/src/main/res/drawable/rounded_<name>_24.xml`.
+Runs `ktlint` (auto-installed on first run to `~/.cache/android-build/ktlint`):
+1. **`[1] Modified files only`** *(Fastest - only formats files in your current `git status`)*
+2. **`[2] Entire project`** *(Formats all `*.kt` and `*.kts` files)*
+3. **`[3] Specific directory / file`** *(Target specific paths)*
