@@ -151,6 +151,7 @@ load_config() {
     CONFIG_main_activity=$(get_config_val "main_activity" ".MainActivity")
     CONFIG_gradle_task=$(get_config_val "gradle_task" "assembleDebug")
     CONFIG_build_variant=$(get_config_val "build_variant" "debug")
+    CONFIG_release_type=$(get_config_val "release_type" "apk")
     CONFIG_apk_path=$(get_config_val "apk_path")
     CONFIG_target_device=$(get_config_val "target_device")
     CONFIG_log_tags=$(get_config_val "log_tags")
@@ -163,6 +164,7 @@ load_config() {
     CONFIG_main_activity="${CONFIG_main_activity:-.MainActivity}"
     CONFIG_gradle_task="${CONFIG_gradle_task:-assembleDebug}"
     CONFIG_build_variant="${CONFIG_build_variant:-debug}"
+    CONFIG_release_type="${CONFIG_release_type:-apk}"
     CONFIG_apk_path="${CONFIG_apk_path:-}"
     CONFIG_target_device="${CONFIG_target_device:-}"
     CONFIG_log_tags="${CONFIG_log_tags:-}"
@@ -384,22 +386,76 @@ action_restart() {
   action_launch
 }
 
-action_stop() {
-  select_device
-  log_info "Force stopping $CONFIG_package_name..."
-  adb_cmd shell am force-stop "$CONFIG_package_name"
-  log_success "App stopped."
+action_clean() {
+  log_info "Running Gradle clean & stopping daemons in ${C_MUTED}$CONFIG_project_dir${RESET}..."
+  cd "$CONFIG_project_dir"
+  local gradlew_bin="./gradlew"
+  if [[ ! -f "$gradlew_bin" ]]; then
+    log_error "No './gradlew' wrapper found in $CONFIG_project_dir!"
+    exit 1
+  fi
+  chmod +x "$gradlew_bin"
+
+  "$gradlew_bin" clean || true
+  "$gradlew_bin" --stop || true
+  log_success "Clean completed & daemons stopped."
 }
 
-action_clear_data() {
-  select_device
-  echo -en "${C_WARN}Are you sure you want to clear all data and cache for ${BOLD}$CONFIG_package_name${RESET}? [y/N]: "
-  read -r confirm
-  if [[ "$confirm" =~ ^[Yy]$ ]]; then
-    adb_cmd shell pm clear "$CONFIG_package_name"
-    log_success "App data cleared."
+action_build_release() {
+  log_info "Starting Release build in ${C_MUTED}$CONFIG_project_dir${RESET}..."
+  cd "$CONFIG_project_dir"
+  local gradlew_bin="./gradlew"
+  if [[ ! -f "$gradlew_bin" ]]; then
+    log_error "No './gradlew' wrapper found in $CONFIG_project_dir!"
+    return 1
+  fi
+  chmod +x "$gradlew_bin"
+
+  local r_type="${CONFIG_release_type:-apk}"
+  local tasks=()
+  case "$r_type" in
+    aab|bundle)
+      tasks=("bundleRelease")
+      ;;
+    both|all)
+      tasks=("assembleRelease" "bundleRelease")
+      ;;
+    apk|*)
+      tasks=("assembleRelease")
+      ;;
+  esac
+
+  local start_time=$(date +%s)
+  log_info "Running Gradle task(s): ${BOLD}${tasks[*]}${RESET}..."
+  if "$gradlew_bin" "${tasks[@]}" --daemon; then
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    log_success "Release build completed in ${BOLD}${duration}s${RESET}!"
+    
+    local out_dir=""
+    if [[ "$r_type" == "aab" || "$r_type" == "bundle" || "$r_type" == "both" || "$r_type" == "all" ]]; then
+      local out_aab=$(find "$CONFIG_project_dir" -maxdepth 6 -name "*.aab" 2>/dev/null | grep "/build/outputs/bundle/release" | xargs ls -t 2>/dev/null | head -1 || true)
+      [[ -n "$out_aab" ]] && log_info "Release Bundle: ${C_ACCENT}$out_aab${RESET}"
+      [[ -n "$out_aab" ]] && out_dir="$(dirname "$out_aab")"
+    fi
+
+    if [[ "$r_type" == "apk" || "$r_type" == "both" || "$r_type" == "all" ]]; then
+      local out_apk=$(find "$CONFIG_project_dir" -maxdepth 6 -name "*release*.apk" 2>/dev/null | grep "/build/outputs/apk/release" | xargs ls -t 2>/dev/null | head -1 || true)
+      [[ -n "$out_apk" ]] && log_info "Release APK:    ${C_ACCENT}$out_apk${RESET}"
+      [[ -n "$out_apk" && -z "$out_dir" ]] && out_dir="$(dirname "$out_apk")"
+    fi
+
+    if [[ -n "$out_dir" && -d "$out_dir" ]]; then
+      echo ""
+      echo -en "${C_PRIMARY}Open release directory in Finder? [y/N]: ${RESET}"
+      read -r open_choice
+      if [[ "$open_choice" =~ ^[Yy]$ ]]; then
+        open "$out_dir"
+      fi
+    fi
   else
-    log_info "Operation cancelled."
+    log_error "Release build failed."
+    return 1
   fi
 }
 
@@ -691,12 +747,13 @@ show_dashboard() {
     # Section 2: App Control
     echo -e "  ${BOLD}[F]${RESET} Force stop"
     echo -e "  ${BOLD}[S]${RESET} Start"
-    echo -e "  ${BOLD}[C]${RESET} Clear data"
     echo ""
 
-    # Section 3: Tools
+    # Section 3: Tools & Builds
     echo -e "  ${BOLD}[M]${RESET} Mirror"
     echo -e "  ${BOLD}[G]${RESET} Gradle Sync"
+    echo -e "  ${BOLD}[C]${RESET} Clean build"
+    echo -e "  ${BOLD}[B]${RESET} Release build"
     echo ""
 
     # Section 4: Device & Project
@@ -724,22 +781,10 @@ show_dashboard() {
       l|L|3) echo ""; action_logs; read -rp "Press Enter to return..." ;;
       f|F|5) echo ""; action_stop; sleep 1 ;;
       s|S|4) echo ""; action_launch; sleep 1 ;;
-      c|C|6) echo ""; action_clear_data; read -rp "Press Enter to return..." ;;
-      fc|FC|Fc)
-        echo ""
-        echo -en "${C_WARN}Clear data for ${BOLD}$CONFIG_package_name${RESET} and re-launch? [y/N]: "
-        read -r confirm
-        if [[ "$confirm" =~ ^[Yy]$ ]]; then
-          adb_cmd shell am force-stop "$CONFIG_package_name"
-          adb_cmd shell pm clear "$CONFIG_package_name"
-          log_success "App data cleared."
-          sleep 0.5
-          action_launch
-        fi
-        read -rp "Press Enter to return..."
-        ;;
       m|M|7) echo ""; action_mirror; sleep 1 ;;
       g|G) echo ""; action_sync; read -rp "Press Enter to return..." ;;
+      c|C|6) echo ""; action_clean; read -rp "Press Enter to return..." ;;
+      b|B) echo ""; action_build_release; read -rp "Press Enter to return..." ;;
       w|W|8) echo ""; action_wireless_connect; read -rp "Press Enter to return..." ;;
       d|D) select_device "true" ;;
       p|P)
@@ -766,7 +811,8 @@ show_help() {
   echo -e "  logs (L)            Stream colored logcat filtered by package PID"
   echo -e "  stop (F)            Force stop the application"
   echo -e "  start (S)           Launch main activity"
-  echo -e "  clear (C)           Clear app data and cache"
+  echo -e "  clean (C)           Run Gradle clean & stop daemons"
+  echo -e "  release (B)         Build release bundle / APK"
   echo -e "  mirror (M)          Launch scrcpy screen mirroring"
   echo -e "  sync (G)            Run Gradle sync & daemon check"
   echo -e "  wifi (W)            Wireless ADB connection helper"
@@ -778,6 +824,8 @@ show_help() {
   echo -e "  $0                                   # Interactive menu"
   echo -e "  $0 run essentials.android.config     # Complete run for Essentials"
   echo -e "  $0 opt essentials.android.config     # Optimized debug build & install"
+  echo -e "  $0 clean                             # Gradle clean & daemon restart"
+  echo -e "  $0 release essentials.android.config # Build release bundle"
   echo -e "  $0 logs airsync.android.config       # Live logs for AirSync"
   echo -e "  $0 editor                            # Open project in Antigravity IDE"
   echo -e "  $0 mirror                            # Mirror screen of active device"
@@ -796,7 +844,7 @@ while [[ $# -gt 0 ]]; do
       show_help
       exit 0
       ;;
-    run|build|install|opt|optimized|sync|launch|restart|stop|clear|uninstall|logs|mirror|devices|wifi|editor|open)
+    run|build|install|opt|optimized|sync|clean|release|bundle|launch|restart|stop|uninstall|logs|mirror|devices|wifi|editor|open)
       SUBCOMMAND="$1"
       shift
       ;;
@@ -835,6 +883,12 @@ case "${SUBCOMMAND:-}" in
   sync)
     action_sync
     ;;
+  clean)
+    action_clean
+    ;;
+  release|bundle)
+    action_build_release
+    ;;
   launch|start)
     action_launch
     ;;
@@ -843,9 +897,6 @@ case "${SUBCOMMAND:-}" in
     ;;
   stop)
     action_stop
-    ;;
-  clear)
-    action_clear_data
     ;;
   uninstall)
     action_uninstall

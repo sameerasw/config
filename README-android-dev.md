@@ -12,24 +12,6 @@ alias android-build="/Users/sameerasandakelum/GIT/config/android-build.sh"
 
 ---
 
-## Usage
-
-### Interactive Menu
-- **If run anywhere without arguments (`android-build` or `./android-build.sh`)**:
-  - Inside an Android project $\to$ auto-detects and loads that project.
-  - Outside an Android project $\to$ prompts with an interactive project picker:
-    ```text
-    android-build
-    ──────────────────────────────────────────────────
-    Available Projects:
-      [1] Essentials      (com.sameerasw.essentials)
-      [2] AirSync         (com.sameerasw.airsync)
-    ──────────────────────────────────────────────────
-    Select project [1-2] (default 1): 
-    ```
-
----
-
 ## Menu Layout
 
 ```text
@@ -48,10 +30,11 @@ android-build
 
   [F] Force stop
   [S] Start
-  [C] Clear data
 
   [M] Mirror
   [G] Gradle Sync
+  [C] Clean build
+  [B] Release build
 
   [W] Wireless ADB
   [D] Switch Device
@@ -62,8 +45,6 @@ android-build
 ──────────────────────────────────────────────────
 > 
 ```
-
-> **Hidden combo**: Typing `FC` will force-stop the app, prompt to clear data/cache, and immediately auto re-launch it.
 
 ---
 
@@ -77,11 +58,34 @@ android-build
 | `L` / `logs` | Stream colored logcat filtered by package PID | `android-build logs essentials.android.config` |
 | `F` / `stop` | Force-stop application | `android-build stop` |
 | `S` / `start` | Start/Launch main activity | `android-build start` |
-| `C` / `clear` | Reset app cache and storage (with confirmation) | `android-build clear` |
 | `M` / `mirror` | Open `scrcpy` window for active device | `android-build mirror` |
 | `G` / `sync` | Run Gradle sync & daemon check | `android-build sync` |
+| `C` / `clean` | Run `./gradlew clean` + stop daemons | `android-build clean` |
+| `B` / `release` | Build production release artifacts based on `release_type` | `android-build release` |
 | `W` / `wifi` | Pair and connect via Wireless ADB | `android-build wifi` |
 | `D` / `devices`| Switch/list connected ADB devices | `android-build devices` |
 | `P` / `project`| Switch active project | `android-build project` |
 | `E` / `editor` | Open workspace file or project in Antigravity IDE | `android-build editor` |
-| `FC` *(menu only)*| Force-stop, clear data, and auto re-launch | |
+
+---
+
+## Configuration Properties (`.android.config`)
+
+```ini
+# Project Information
+project_name=Essentials
+project_dir=/Users/sameerasandakelum/GIT/essentials
+workspace_file=/Users/sameerasandakelum/GIT/config/essentials.code-workspace
+package_name=com.sameerasw.essentials
+main_activity=.MainActivity
+
+# Development Builds
+gradle_task=assembleDebug
+build_variant=debug
+
+# Release Builds: 'apk' (assembleRelease), 'aab' (bundleRelease), or 'both'
+release_type=apk
+
+# Target Device Serial (optional)
+target_device=46121FDAP004D9
+```
