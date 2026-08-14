@@ -104,27 +104,23 @@ select_project_interactive() {
     ((i++))
   done
   echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"
-  read -rp "Select project [1-$count] (default 1): " choice
-  choice="${choice:-1}"
-  if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "$count" ]; then
-    CONFIG_FILE="${config_files[$((choice-1))]}"
-  else
-    # Try fuzzy matching project name or default to first
-    local matched=false
-    for cfg in "${config_files[@]}"; do
-      local p_name=$(grep -E "^[[:space:]]*project_name[[:space:]]*=" "$cfg" 2>/dev/null | head -1 | cut -d'=' -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || basename "$cfg" .android.config)
-      if [[ "${p_name:0:1}" == "${choice:0:1}" || "${p_name,,}" == *"${choice,,}"* ]]; then
-        CONFIG_FILE="$cfg"
-        matched=true
-        break
-      fi
-    done
-    if [[ "$matched" != "true" ]]; then
-      log_warn "Invalid selection '$choice'. Defaulting to [1] $(basename "${config_files[0]}" .android.config)..."
-      sleep 1
-      CONFIG_FILE="${config_files[0]}"
-    fi
-  fi
+  while true; do
+    read -rp "Select project [1-$count] (default 1): " choice
+    choice="${choice:-1}"
+    case "$choice" in
+      [1-9]|[1-9][0-9])
+        if [ "$choice" -ge 1 ] && [ "$choice" -le "$count" ]; then
+          CONFIG_FILE="${config_files[$((choice-1))]}"
+          break
+        else
+          log_warn "Invalid input."
+        fi
+        ;;
+      *)
+        log_warn "Invalid input."
+        ;;
+    esac
+  done
 }
 
 load_config() {
@@ -243,15 +239,23 @@ select_device() {
       ((i++))
     done <<< "$devices_output"
 
-    read -rp "Select device [1-$count] (default 1): " choice
-    choice="${choice:-1}"
-    if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "$count" ]; then
-      picked_dev="${dev_arr[$((choice-1))]}"
-    else
-      log_warn "Invalid selection '$choice'. Defaulting to [1] ${dev_arr[0]}..."
-      sleep 1
-      picked_dev="${dev_arr[0]}"
-    fi
+    while true; do
+      read -rp "Select device [1-$count] (default 1): " choice
+      choice="${choice:-1}"
+      case "$choice" in
+        [1-9]|[1-9][0-9])
+          if [ "$choice" -ge 1 ] && [ "$choice" -le "$count" ]; then
+            picked_dev="${dev_arr[$((choice-1))]}"
+            break
+          else
+            log_warn "Invalid input."
+          fi
+          ;;
+        *)
+          log_warn "Invalid input."
+          ;;
+      esac
+    done
   fi
 
   SELECTED_DEVICE="$picked_dev"
@@ -745,7 +749,7 @@ show_dashboard() {
         ;;
       e|E) action_open_editor; sleep 1 ;;
       q|Q) exit 0 ;;
-      *) log_warn "Invalid option." ; sleep 1 ;;
+      *) log_warn "Invalid input." ; sleep 1 ;;
     esac
   done
 }
