@@ -450,18 +450,17 @@ action_build_release() {
         continue
       fi
 
-      # Validate password and find alias
+      # Validate password and find alias without triggering set -e
       if [[ -x "$keytool_bin" ]]; then
-        local keytool_out
-        keytool_out=$("$keytool_bin" -list -keystore "$CONFIG_keystore_file" -storepass "$cached_pass" 2>&1)
-        if [[ $? -eq 0 ]]; then
+        local keytool_out=""
+        if keytool_out=$("$keytool_bin" -list -keystore "$CONFIG_keystore_file" -storepass "$cached_pass" 2>/dev/null); then
           if [[ -z "$alias_name" ]]; then
             alias_name=$(echo "$keytool_out" | grep "PrivateKeyEntry" | head -1 | cut -d',' -f1 | tr -d ' ' || echo "upload")
             [[ -z "$alias_name" ]] && alias_name="upload"
           fi
           break
         else
-          log_error "Incorrect keystore password for $(basename "$CONFIG_keystore_file")."
+          log_error "Incorrect keystore password for $(basename "$CONFIG_keystore_file"). Try again."
           cached_pass=""
         fi
       else
@@ -501,7 +500,7 @@ action_build_release() {
     fi
 
     if [[ "$r_type" == "apk" || "$r_type" == "both" || "$r_type" == "all" ]]; then
-      local raw_apk=$(find "$CONFIG_project_dir" -maxdepth 6 -name "*release*.apk" 2>/dev/null | grep "/build/outputs/apk/release" | xargs ls -t 2>/dev/null | head -1 || true)
+      local raw_apk=$(find "$CONFIG_project_dir" -maxdepth 6 -name "*release*.apk" ! -name "*.tmp.apk" ! -name "*-aligned.apk" 2>/dev/null | grep "/build/outputs/apk/release" | xargs ls -t 2>/dev/null | head -1 || true)
       local final_apk="$raw_apk"
 
       if [[ -n "$raw_apk" && -n "$CONFIG_keystore_file" && -f "$CONFIG_keystore_file" ]]; then
@@ -515,11 +514,13 @@ action_build_release() {
 
         log_info "Signing release APK with ${C_ACCENT}$(basename "$CONFIG_keystore_file")${RESET}..."
 
+        local to_sign="$raw_apk"
         if [[ -n "$zipalign_bin" && -x "$zipalign_bin" && "$raw_apk" == *"-unsigned.apk" ]]; then
           local aligned_apk="$apk_dir/app-release-aligned.tmp.apk"
           rm -f "$aligned_apk"
-          "$zipalign_bin" -p -f -v 4 "$raw_apk" "$aligned_apk" >/dev/null 2>&1 || cp "$raw_apk" "$aligned_apk"
-          raw_apk="$aligned_apk"
+          if "$zipalign_bin" -p -f -v 4 "$raw_apk" "$aligned_apk" >/dev/null 2>&1 && [[ -s "$aligned_apk" ]]; then
+            to_sign="$aligned_apk"
+          fi
         fi
 
         if [[ -n "$apksigner_bin" && -x "$apksigner_bin" ]]; then
@@ -527,16 +528,17 @@ action_build_release() {
           local sign_success=0
 
           while [[ $sign_success -eq 0 ]]; do
-            if "$apksigner_bin" sign --ks "$CONFIG_keystore_file" \
+            local apksign_err=""
+            if apksign_err=$("$apksigner_bin" sign --ks "$CONFIG_keystore_file" \
                 --ks-pass "pass:$cached_pass" \
-                ${CONFIG_keystore_alias:+--ks-key-alias "$CONFIG_keystore_alias"} \
+                --ks-key-alias "$alias_name" \
                 ${CONFIG_key_pass:+--key-pass "pass:$CONFIG_key_pass"} \
-                --out "$temp_signed_apk" "$raw_apk" >/dev/null 2>&1; then
+                --out "$temp_signed_apk" "$to_sign" 2>&1); then
               sign_success=1
               break
             else
-              log_error "Incorrect password or signing failed."
-              echo -en "${C_PRIMARY}Enter Keystore Password for $(basename "$CONFIG_keystore_file"): ${RESET}"
+              log_error "APK signing failed."
+              echo -en "${C_PRIMARY}Enter Keystore / Key Password for $(basename "$CONFIG_keystore_file"): ${RESET}"
               read -rs cached_pass
               echo ""
             fi
