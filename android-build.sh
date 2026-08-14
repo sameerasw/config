@@ -206,6 +206,32 @@ save_target_device_to_config() {
   fi
 }
 
+discover_and_connect_mdns() {
+  local mdns_output
+  mdns_output=$(adb mdns services 2>/dev/null | grep -E "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+" || true)
+  if [[ -n "$mdns_output" ]]; then
+    log_info "Discovered wireless ADB device(s) via mDNS:"
+    local auto_connected=0
+    while IFS= read -r s_line; do
+      local s_name=$(echo "$s_line" | awk '{print $1}')
+      local s_addr=$(echo "$s_line" | awk '{print $NF}')
+      if [[ -n "$s_addr" ]]; then
+        log_info "Connecting to ${BOLD}$s_name${RESET} ($s_addr)..."
+        if adb connect "$s_addr" 2>/dev/null | grep -qi "connected"; then
+          log_success "Connected to $s_addr."
+          auto_connected=1
+        fi
+      fi
+    done <<< "$mdns_output"
+
+    if [[ $auto_connected -eq 1 ]]; then
+      sleep 0.5
+      return 0
+    fi
+  fi
+  return 1
+}
+
 select_device() {
   local force="${1:-false}"
   check_adb
@@ -213,9 +239,28 @@ select_device() {
   devices_output=$(get_connected_devices)
   
   if [[ -z "$devices_output" ]]; then
-    log_error "No connected Android devices found via ADB."
-    echo -e "${C_MUTED}Tip: Connect your device via USB with USB Debugging enabled, or connect via Wi-Fi ADB.${RESET}"
-    exit 1
+    # Try mDNS auto-discovery first
+    if discover_and_connect_mdns; then
+      devices_output=$(get_connected_devices)
+    fi
+
+    # If still no device connected, prompt for Wi-Fi ADB IP:PORT
+    if [[ -z "$devices_output" ]]; then
+      echo -e "\n${BOLD}${C_PRIMARY}No connected Android devices found.${RESET}"
+      echo -en "${C_PRIMARY}Connect via Wi-Fi ADB? (Enter IP:PORT or press Enter to skip): ${RESET}"
+      read -r wifi_addr
+      if [[ -n "$wifi_addr" ]]; then
+        adb connect "$wifi_addr"
+        sleep 0.5
+        devices_output=$(get_connected_devices)
+      fi
+
+      if [[ -z "$devices_output" ]]; then
+        log_error "No Android device connected."
+        echo -e "${C_MUTED}Tip: Turn on Wireless Debugging on your phone or plug in via USB.${RESET}"
+        exit 1
+      fi
+    fi
   fi
 
   # If not forcing a re-select and we already have a valid selected/configured device that is still online
