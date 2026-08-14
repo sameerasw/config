@@ -338,7 +338,25 @@ staple_validate_dmg() {
 
   local dmg_file="${CONFIG_dmg_name:-$CONFIG_project_name.dmg}"
 
-  xcrun stapler staple "$dmg_file"
+  local max_attempts=6
+  local attempt=1
+  local stapled=false
+
+  while [[ $attempt -le $max_attempts ]]; do
+    if xcrun stapler staple "$dmg_file" 2>/dev/null; then
+      stapled=true
+      break
+    fi
+    log_info "Stapling ticket not available yet on CloudKit CDN. Retrying in 10s ($attempt/$max_attempts)..."
+    sleep 10
+    attempt=$((attempt + 1))
+  done
+
+  if [[ "$stapled" != "true" ]]; then
+    # Run once more without suppressing error output to fail visibly
+    xcrun stapler staple "$dmg_file"
+  fi
+
   xcrun stapler validate "$dmg_file"
 
   log_success "DMG stapled and validated successfully."
