@@ -18,63 +18,43 @@ android-build
   Device:    46121FDAP004D9
   Task:      assembleDebug
 ──────────────────────────────────────────────────
-  [1] Run & Debug
-  [2] Install only
-  [3] Logcat
-  [4] Re-launch
-  [5] Force stop
-  [6] Clear data
-  [7] Mirror
-  [8] Wireless ADB
-  [d] Switch Device
-  [q] Quit
+  [R] Run & Debug
+  [I] Install only
+  [O] Optimized debug
+  [L] Logcat
+
+  [F] Force stop
+  [S] Start
+  [C] Clear data
+
+  [M] Mirror
+  [G] Gradle Sync
+
+  [W] Wireless ADB
+  [D] Switch Device
+
+  [Q] Quit
 ──────────────────────────────────────────────────
 > 
 ```
 
+> **Hidden combo**: Typing `FC` will force-stop the app, clear data/cache (with confirmation prompt), and immediately auto re-launch it.
+
 ---
 
-## CLI Commands
+## Shortcuts & CLI Commands
 
-| Command | Description | Example |
+| Shortcut / Command | Description | Example |
 | :--- | :--- | :--- |
-| `run` | Build $\to$ Install $\to$ Launch $\to$ Stream Logs | `./android-build.sh run essentials.android.config` |
-| `build` | Execute Gradle build task | `./android-build.sh build` |
-| `install` | Install built APK to selected device | `./android-build.sh install` |
-| `launch` | Start app main activity | `./android-build.sh launch` |
-| `restart` | Force-stop and restart app | `./android-build.sh restart` |
-| `stop` | Force-stop application | `./android-build.sh stop` |
-| `clear` | Reset app cache and storage (with confirmation) | `./android-build.sh clear` |
-| `logs` | Stream colored logcat filtered by package PID | `./android-build.sh logs essentials.android.config` |
-| `mirror` | Open `scrcpy` window for active device | `./android-build.sh mirror` |
-| `devices`| List all connected ADB devices | `./android-build.sh devices` |
-| `wifi` | Pair and connect via Wireless ADB | `./android-build.sh wifi` |
-
----
-
-## Configuration Files
-
-Create `.android.config` files (e.g. `essentials.android.config` or `airsync.android.config`) in the `config` directory:
-
-```ini
-# Project Name
-project_name=Essentials
-
-# Path to local repository root
-project_dir=/Users/sameerasandakelum/GIT/essentials
-
-# Android Application Package Name
-package_name=com.sameerasw.essentials
-
-# Main Activity (relative or full)
-main_activity=.MainActivity
-
-# Gradle task to run
-gradle_task=assembleDebug
-
-# Build variant
-build_variant=debug
-
-# Optional: Specific target device serial
-# target_device=46121FDAP004D9
-```
+| `R` / `run` | Build $\to$ Install $\to$ Launch $\to$ Stream Logs | `./android-build.sh run essentials.android.config` |
+| `I` / `install` | Build and install APK | `./android-build.sh install` |
+| `O` / `opt` | Build & install with optimized dev settings | `./android-build.sh opt essentials.android.config` |
+| `L` / `logs` | Stream colored logcat filtered by package PID | `./android-build.sh logs essentials.android.config` |
+| `F` / `stop` | Force-stop application | `./android-build.sh stop` |
+| `S` / `start` | Start/Launch main activity | `./android-build.sh start` |
+| `C` / `clear` | Reset app cache and storage (with confirmation) | `./android-build.sh clear` |
+| `M` / `mirror` | Open `scrcpy` window for active device | `./android-build.sh mirror` |
+| `G` / `sync` | Run Gradle sync & daemon check | `./android-build.sh sync` |
+| `W` / `wifi` | Pair and connect via Wireless ADB | `./android-build.sh wifi` |
+| `D` / `devices`| Switch/list connected ADB devices | `./android-build.sh devices` |
+| `FC` *(menu only)*| Force-stop, clear data, and auto re-launch | |

@@ -405,6 +405,110 @@ action_run_all() {
   action_logs
 }
 
+action_sync() {
+  log_info "Running Gradle sync & dependency check in ${C_MUTED}$CONFIG_project_dir${RESET}..."
+  cd "$CONFIG_project_dir"
+  local gradlew_bin="./gradlew"
+  if [[ ! -f "$gradlew_bin" ]]; then
+    log_error "No './gradlew' wrapper found in $CONFIG_project_dir!"
+    exit 1
+  fi
+  chmod +x "$gradlew_bin"
+  if "$gradlew_bin" help --daemon >/dev/null && "$gradlew_bin" tasks --daemon >/dev/null; then
+    log_success "Gradle sync & daemon check complete!"
+  else
+    log_error "Gradle sync failed."
+    exit 1
+  fi
+}
+
+find_app_gradle_file() {
+  local p="$CONFIG_project_dir"
+  if [[ -f "$p/app/build.gradle.kts" ]]; then
+    echo "$p/app/build.gradle.kts"
+  elif [[ -f "$p/app/build.gradle" ]]; then
+    echo "$p/app/build.gradle"
+  elif [[ -f "$p/build.gradle.kts" ]]; then
+    echo "$p/build.gradle.kts"
+  elif [[ -f "$p/build.gradle" ]]; then
+    echo "$p/build.gradle"
+  fi
+}
+
+has_optimized_build_config() {
+  local gradle_file
+  gradle_file=$(find_app_gradle_file)
+  if [[ -n "$gradle_file" && -f "$gradle_file" ]]; then
+    if grep -q "optimized dev build" "$gradle_file"; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+action_optimized_debug() {
+  local gradle_file
+  gradle_file=$(find_app_gradle_file)
+
+  if [[ -z "$gradle_file" || ! -f "$gradle_file" ]]; then
+    log_error "Could not locate app build.gradle(.kts) file."
+    exit 1
+  fi
+
+  if ! grep -q "optimized dev build" "$gradle_file"; then
+    log_error "Optimized dev build pattern not found in $gradle_file."
+    exit 1
+  fi
+
+  log_info "Enabling optimized dev build configuration in $(basename "$gradle_file")..."
+
+  # Create backup
+  cp "$gradle_file" "$gradle_file.bak"
+
+  # Uncomment the block between "optimized dev build" and "end"
+  python3 -c "
+import sys, re
+
+filepath = sys.argv[1]
+with open(filepath, 'r') as f:
+    content = f.read()
+
+# Pattern matching commented block
+pattern = r'(//\s*optimized dev build\n)(.*?)(//\s*end)'
+def uncomment_block(match):
+    header = match.group(1)
+    body = match.group(2)
+    footer = match.group(3)
+    uncommented_body = '\n'.join([re.sub(r'^\s*//\s?', '          ', line) if line.strip().startswith('//') else line for line in body.splitlines()])
+    return f'{header}{uncommented_body}\n{footer}'
+
+new_content = re.sub(pattern, uncomment_block, content, flags=re.DOTALL)
+with open(filepath, 'w') as f:
+    f.write(new_content)
+" "$gradle_file"
+
+  log_info "Building & installing optimized debug..."
+  local build_failed=0
+  action_build || build_failed=1
+
+  if [[ $build_failed -eq 0 ]]; then
+    action_install || build_failed=1
+  fi
+
+  # Restore comment state
+  log_info "Restoring $gradle_file state..."
+  if [[ -f "$gradle_file.bak" ]]; then
+    mv "$gradle_file.bak" "$gradle_file"
+  fi
+
+  if [[ $build_failed -ne 0 ]]; then
+    log_error "Optimized debug build/install encountered errors."
+    exit 1
+  else
+    log_success "Optimized debug build & install complete!"
+  fi
+}
+
 action_wireless_connect() {
   echo -e "\n${BOLD}${C_PRIMARY}=== Wireless ADB Pair & Connect ===${RESET}"
   echo -e "1. On phone: Settings -> Developer Options -> Wireless Debugging."
@@ -437,28 +541,67 @@ show_dashboard() {
     echo -e "  ${BOLD}Device:${RESET}    ${C_SUCCESS}${SELECTED_DEVICE}${RESET}"
     echo -e "  ${BOLD}Task:${RESET}      ${C_WARN}${CONFIG_gradle_task}${RESET}"
     echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"
-    echo -e "  ${BOLD}[1]${RESET} Run & Debug"
-    echo -e "  ${BOLD}[2]${RESET} Install only"
-    echo -e "  ${BOLD}[3]${RESET} Logcat"
-    echo -e "  ${BOLD}[4]${RESET} Re-launch"
-    echo -e "  ${BOLD}[5]${RESET} Force stop"
-    echo -e "  ${BOLD}[6]${RESET} Clear data"
-    echo -e "  ${BOLD}[7]${RESET} Mirror"
-    echo -e "  ${BOLD}[8]${RESET} Wireless ADB"
-    echo -e "  ${BOLD}[d]${RESET} Switch Device"
-    echo -e "  ${BOLD}[q]${RESET} Quit"
+    
+    # Section 1: Build & Run
+    echo -e "  ${BOLD}[R]${RESET} Run & Debug"
+    echo -e "  ${BOLD}[I]${RESET} Install only"
+    if has_optimized_build_config; then
+      echo -e "  ${BOLD}[O]${RESET} Optimized debug"
+    fi
+    echo -e "  ${BOLD}[L]${RESET} Logcat"
+    echo ""
+
+    # Section 2: App Control
+    echo -e "  ${BOLD}[F]${RESET} Force stop"
+    echo -e "  ${BOLD}[S]${RESET} Start"
+    echo -e "  ${BOLD}[C]${RESET} Clear data"
+    echo ""
+
+    # Section 3: Tools
+    echo -e "  ${BOLD}[M]${RESET} Mirror"
+    echo -e "  ${BOLD}[G]${RESET} Gradle Sync"
+    echo ""
+
+    # Section 4: Device
+    echo -e "  ${BOLD}[W]${RESET} Wireless ADB"
+    echo -e "  ${BOLD}[D]${RESET} Switch Device"
+    echo ""
+
+    # Section 5: Quit
+    echo -e "  ${BOLD}[Q]${RESET} Quit"
     echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"
     
     read -rp "> " opt
     case "$opt" in
-      1) echo ""; action_run_all; read -rp "Press Enter to return..." ;;
-      2) echo ""; action_build && action_install; read -rp "Press Enter to return..." ;;
-      3) echo ""; action_logs; read -rp "Press Enter to return..." ;;
-      4) echo ""; action_restart; sleep 1 ;;
-      5) echo ""; action_stop; sleep 1 ;;
-      6) echo ""; action_clear_data; read -rp "Press Enter to return..." ;;
-      7) echo ""; action_mirror; sleep 1 ;;
-      8) echo ""; action_wireless_connect; read -rp "Press Enter to return..." ;;
+      r|R|1) echo ""; action_run_all; read -rp "Press Enter to return..." ;;
+      i|I|2) echo ""; action_build && action_install; read -rp "Press Enter to return..." ;;
+      o|O)
+        if has_optimized_build_config; then
+          echo ""; action_optimized_debug; read -rp "Press Enter to return..."
+        else
+          log_warn "Optimized dev build is not configured in this project." ; sleep 1
+        fi
+        ;;
+      l|L|3) echo ""; action_logs; read -rp "Press Enter to return..." ;;
+      f|F|5) echo ""; action_stop; sleep 1 ;;
+      s|S|4) echo ""; action_launch; sleep 1 ;;
+      c|C|6) echo ""; action_clear_data; read -rp "Press Enter to return..." ;;
+      fc|FC|Fc)
+        echo ""
+        echo -en "${C_WARN}Clear data for ${BOLD}$CONFIG_package_name${RESET} and re-launch? [y/N]: "
+        read -r confirm
+        if [[ "$confirm" =~ ^[Yy]$ ]]; then
+          adb_cmd shell am force-stop "$CONFIG_package_name"
+          adb_cmd shell pm clear "$CONFIG_package_name"
+          log_success "App data cleared."
+          sleep 0.5
+          action_launch
+        fi
+        read -rp "Press Enter to return..."
+        ;;
+      m|M|7) echo ""; action_mirror; sleep 1 ;;
+      g|G) echo ""; action_sync; read -rp "Press Enter to return..." ;;
+      w|W|8) echo ""; action_wireless_connect; read -rp "Press Enter to return..." ;;
       d|D) select_device "true" ;;
       q|Q) exit 0 ;;
       *) log_warn "Invalid option." ; sleep 1 ;;
@@ -472,21 +615,22 @@ show_help() {
   echo -e "Usage: $0 [command] [config_file] [options]\n"
   echo -e "${BOLD}Commands:${RESET}"
   echo -e "  (none)              Launch interactive menu"
-  echo -e "  run                 Build, install, launch, and stream logs"
-  echo -e "  build               Run Gradle build task"
-  echo -e "  install             Install APK to target device"
-  echo -e "  launch              Launch main activity"
-  echo -e "  restart             Force stop and relaunch app"
-  echo -e "  stop                Force stop the application"
-  echo -e "  clear               Clear app data and cache"
-  echo -e "  logs                Stream colored logcat filtered by package PID"
-  echo -e "  mirror              Launch scrcpy screen mirroring"
-  echo -e "  devices             List connected devices"
-  echo -e "  wifi                Wireless ADB connection helper"
+  echo -e "  run (R)             Build, install, launch, and stream logs"
+  echo -e "  install (I)         Build and install APK"
+  echo -e "  opt (O)             Build and install with optimized dev settings"
+  echo -e "  logs (L)            Stream colored logcat filtered by package PID"
+  echo -e "  stop (F)            Force stop the application"
+  echo -e "  start (S)           Launch main activity"
+  echo -e "  clear (C)           Clear app data and cache"
+  echo -e "  mirror (M)          Launch scrcpy screen mirroring"
+  echo -e "  sync (G)            Run Gradle sync & daemon check"
+  echo -e "  wifi (W)            Wireless ADB connection helper"
+  echo -e "  devices (D)         List connected devices"
   echo -e "  help                Show this help message\n"
   echo -e "${BOLD}Examples:${RESET}"
   echo -e "  $0                                   # Interactive menu"
   echo -e "  $0 run essentials.android.config     # Complete run for Essentials"
+  echo -e "  $0 opt essentials.android.config     # Optimized debug build & install"
   echo -e "  $0 logs airsync.android.config       # Live logs for AirSync"
   echo -e "  $0 mirror                            # Mirror screen of active device"
 }
@@ -504,7 +648,7 @@ while [[ $# -gt 0 ]]; do
       show_help
       exit 0
       ;;
-    run|build|install|launch|restart|stop|clear|uninstall|logs|mirror|split|devices|wifi)
+    run|build|install|opt|optimized|sync|launch|restart|stop|clear|uninstall|logs|mirror|devices|wifi)
       SUBCOMMAND="$1"
       shift
       ;;
@@ -537,6 +681,12 @@ case "${SUBCOMMAND:-}" in
   install)
     action_install
     ;;
+  opt|optimized)
+    action_optimized_debug
+    ;;
+  sync)
+    action_sync
+    ;;
   launch)
     action_launch
     ;;
@@ -557,9 +707,6 @@ case "${SUBCOMMAND:-}" in
     ;;
   mirror)
     action_mirror
-    ;;
-  split)
-    action_split_window
     ;;
   devices)
     check_adb
