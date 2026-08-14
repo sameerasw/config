@@ -181,9 +181,9 @@ save_target_device_to_config() {
     else
       echo "target_device=$new_device" >> "$CONFIG_FILE"
     fi
+    CONFIG_target_device="$new_device"
+    log_success "Saved '$new_device' as default target in $(basename "$CONFIG_FILE")."
   fi
-  CONFIG_target_device="$new_device"
-  SELECTED_DEVICE="$new_device"
 }
 
 select_device() {
@@ -212,10 +212,10 @@ select_device() {
   fi
 
   local count=$(echo "$devices_output" | wc -l | tr -d ' ')
+  local picked_dev=""
 
   if [[ "$count" -eq 1 ]]; then
-    local dev=$(echo "$devices_output" | awk '{print $1}')
-    save_target_device_to_config "$dev"
+    picked_dev=$(echo "$devices_output" | awk '{print $1}')
   else
     echo -e "\n${BOLD}${C_PRIMARY}Multiple Android Devices Detected:${RESET}"
     local i=1
@@ -231,13 +231,22 @@ select_device() {
 
     read -rp "Select device [1-$count] (default 1): " choice
     choice="${choice:-1}"
-    local picked_dev=""
     if [[ "$choice" -ge 1 && "$choice" -le "$count" ]]; then
       picked_dev="${dev_arr[$((choice-1))]}"
     else
       picked_dev="${dev_arr[0]}"
     fi
-    save_target_device_to_config "$picked_dev"
+  fi
+
+  SELECTED_DEVICE="$picked_dev"
+
+  # Ask if user wants to persist this device to the config file
+  if [[ -n "$CONFIG_FILE" && -f "$CONFIG_FILE" ]]; then
+    echo -en "${C_MUTED}Save '$picked_dev' as default target device in config? [y/N]: ${RESET}"
+    read -r save_choice
+    if [[ "$save_choice" =~ ^[Yy]$ ]]; then
+      save_target_device_to_config "$picked_dev"
+    fi
   fi
 }
 
@@ -258,11 +267,14 @@ find_built_apk() {
     return 0
   fi
 
-  # Auto find debug APK
+  # Auto find newest APK matching variant inside outputs/apk
   local found
-  found=$(find "$project_path" -maxdepth 6 -name "*-${CONFIG_build_variant}.apk" 2>/dev/null | grep "/build/outputs/apk/" | head -1 || true)
+  found=$(find "$project_path" -maxdepth 6 -name "*-${CONFIG_build_variant}.apk" 2>/dev/null | grep "/build/outputs/apk/" | xargs ls -t 2>/dev/null | head -1 || true)
   if [[ -z "$found" ]]; then
-    found=$(find "$project_path" -maxdepth 6 -name "*.apk" 2>/dev/null | grep "/build/outputs/apk/" | head -1 || true)
+    found=$(find "$project_path" -maxdepth 6 -name "*.apk" 2>/dev/null | grep "/build/outputs/apk/" | xargs ls -t 2>/dev/null | head -1 || true)
+  fi
+  if [[ -z "$found" ]]; then
+    found=$(find "$project_path" -maxdepth 7 -name "*.apk" 2>/dev/null | xargs ls -t 2>/dev/null | head -1 || true)
   fi
   echo "$found"
 }
@@ -717,7 +729,7 @@ show_help() {
 
 # --- CLI Entry Point ---
 if [[ $# -eq 0 ]]; then
-  load_config "$DEFAULT_CONFIG"
+  load_config ""
   show_dashboard
   exit 0
 fi
@@ -749,7 +761,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-load_config "${CONFIG_FILE:-$DEFAULT_CONFIG}"
+load_config "${CONFIG_FILE:-}"
 
 case "${SUBCOMMAND:-}" in
   run)
