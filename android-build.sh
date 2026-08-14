@@ -76,8 +76,54 @@ detect_project() {
   fi
 }
 
+select_project_interactive() {
+  local config_files=()
+  while IFS= read -r f; do
+    [[ -n "$f" && "$(basename "$f")" != "template.android.config" ]] && config_files+=("$f")
+  done < <(find "$SCRIPT_DIR" -maxdepth 2 -name "*.android.config" 2>/dev/null | sort || true)
+
+  local count=${#config_files[@]}
+  if [[ "$count" -eq 0 ]]; then
+    return 0
+  fi
+
+  if [[ "$count" -eq 1 ]]; then
+    CONFIG_FILE="${config_files[0]}"
+    return 0
+  fi
+
+  clear
+  echo -e "${BOLD}${C_PRIMARY}android-build${RESET}"
+  echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"
+  echo -e "Available Projects:"
+  local i=1
+  for cfg in "${config_files[@]}"; do
+    local p_name=$(grep -E "^[[:space:]]*project_name[[:space:]]*=" "$cfg" 2>/dev/null | head -1 | cut -d'=' -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || basename "$cfg" .android.config)
+    local p_pkg=$(grep -E "^[[:space:]]*package_name[[:space:]]*=" "$cfg" 2>/dev/null | head -1 | cut -d'=' -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || echo "")
+    printf "  ${BOLD}[%d]${RESET} %-15s ${C_MUTED}(%s)${RESET}\n" "$i" "$p_name" "$p_pkg"
+    ((i++))
+  done
+  echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"
+  read -rp "Select project [1-$count] (default 1): " choice
+  choice="${choice:-1}"
+  if [[ "$choice" -ge 1 && "$choice" -le "$count" ]]; then
+    CONFIG_FILE="${config_files[$((choice-1))]}"
+  else
+    CONFIG_FILE="${config_files[0]}"
+  fi
+}
+
 load_config() {
-  local file="$1"
+  local file="${1:-}"
+
+  # If no file provided and we are not in an android project directory, prompt project picker
+  if [[ -z "$file" ]]; then
+    if [[ ! -f "./build.gradle.kts" && ! -f "./build.gradle" && ! -f "./gradlew" ]]; then
+      select_project_interactive
+      file="${CONFIG_FILE:-}"
+    fi
+  fi
+
   if [[ -n "$file" && "$file" != /* ]]; then
     if [[ -f "$SCRIPT_DIR/$file" ]]; then
       file="$SCRIPT_DIR/$file"
@@ -90,6 +136,7 @@ load_config() {
     CONFIG_FILE="$file"
     CONFIG_project_name=$(get_config_val "project_name" "AndroidApp")
     CONFIG_project_dir=$(get_config_val "project_dir" "$SCRIPT_DIR")
+    CONFIG_workspace_file=$(get_config_val "workspace_file")
     CONFIG_package_name=$(get_config_val "package_name")
     CONFIG_main_activity=$(get_config_val "main_activity" ".MainActivity")
     CONFIG_gradle_task=$(get_config_val "gradle_task" "assembleDebug")
@@ -101,6 +148,7 @@ load_config() {
     detect_project
     CONFIG_project_name="${CONFIG_project_name:-Essentials}"
     CONFIG_project_dir="${CONFIG_project_dir:-$HOME/GIT/essentials}"
+    CONFIG_workspace_file="${CONFIG_workspace_file:-}"
     CONFIG_package_name="${CONFIG_package_name:-com.sameerasw.essentials}"
     CONFIG_main_activity="${CONFIG_main_activity:-.MainActivity}"
     CONFIG_gradle_task="${CONFIG_gradle_task:-assembleDebug}"
@@ -517,6 +565,26 @@ with open(filepath, 'w') as f:
   fi
 }
 
+action_open_editor() {
+  local target_path="${CONFIG_workspace_file:-$CONFIG_project_dir}"
+  if [[ -n "$CONFIG_workspace_file" && -f "$CONFIG_workspace_file" ]]; then
+    target_path="$CONFIG_workspace_file"
+  elif [[ -n "$CONFIG_project_dir" && -d "$CONFIG_project_dir" ]]; then
+    target_path="$CONFIG_project_dir"
+  fi
+
+  local agy_bin="/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide"
+  log_info "Opening ${C_ACCENT}$target_path${RESET} in Antigravity IDE..."
+
+  if [[ -f "$agy_bin" ]]; then
+    "$agy_bin" "$target_path" >/dev/null 2>&1 &
+    log_success "Opened in Antigravity IDE."
+  else
+    open -a "Antigravity IDE" "$target_path" 2>/dev/null || open "$target_path"
+    log_success "Opened."
+  fi
+}
+
 action_wireless_connect() {
   echo -e "\n${BOLD}${C_PRIMARY}=== Wireless ADB Pair & Connect ===${RESET}"
   echo -e "1. On phone: Settings -> Developer Options -> Wireless Debugging."
@@ -575,7 +643,8 @@ show_dashboard() {
     echo -e "  ${BOLD}[D]${RESET} Switch Device"
     echo ""
 
-    # Section 5: Quit
+    # Section 5: Editor & Quit
+    echo -e "  ${BOLD}[E]${RESET} Open in editor"
     echo -e "  ${BOLD}[Q]${RESET} Quit"
     echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"
     
@@ -611,6 +680,7 @@ show_dashboard() {
       g|G) echo ""; action_sync; read -rp "Press Enter to return..." ;;
       w|W|8) echo ""; action_wireless_connect; read -rp "Press Enter to return..." ;;
       d|D) select_device "true" ;;
+      e|E) action_open_editor; sleep 1 ;;
       q|Q) exit 0 ;;
       *) log_warn "Invalid option." ; sleep 1 ;;
     esac
@@ -634,12 +704,14 @@ show_help() {
   echo -e "  sync (G)            Run Gradle sync & daemon check"
   echo -e "  wifi (W)            Wireless ADB connection helper"
   echo -e "  devices (D)         List connected devices"
+  echo -e "  editor (E)          Open workspace / project in Antigravity IDE"
   echo -e "  help                Show this help message\n"
   echo -e "${BOLD}Examples:${RESET}"
   echo -e "  $0                                   # Interactive menu"
   echo -e "  $0 run essentials.android.config     # Complete run for Essentials"
   echo -e "  $0 opt essentials.android.config     # Optimized debug build & install"
   echo -e "  $0 logs airsync.android.config       # Live logs for AirSync"
+  echo -e "  $0 editor                            # Open project in Antigravity IDE"
   echo -e "  $0 mirror                            # Mirror screen of active device"
 }
 
@@ -656,7 +728,7 @@ while [[ $# -gt 0 ]]; do
       show_help
       exit 0
       ;;
-    run|build|install|opt|optimized|sync|launch|restart|stop|clear|uninstall|logs|mirror|devices|wifi)
+    run|build|install|opt|optimized|sync|launch|restart|stop|clear|uninstall|logs|mirror|devices|wifi|editor|open)
       SUBCOMMAND="$1"
       shift
       ;;
@@ -695,7 +767,7 @@ case "${SUBCOMMAND:-}" in
   sync)
     action_sync
     ;;
-  launch)
+  launch|start)
     action_launch
     ;;
   restart)
@@ -722,6 +794,9 @@ case "${SUBCOMMAND:-}" in
     ;;
   wifi)
     action_wireless_connect
+    ;;
+  editor|open)
+    action_open_editor
     ;;
   "")
     show_dashboard
