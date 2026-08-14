@@ -152,6 +152,10 @@ load_config() {
     CONFIG_gradle_task=$(get_config_val "gradle_task" "assembleDebug")
     CONFIG_build_variant=$(get_config_val "build_variant" "debug")
     CONFIG_release_type=$(get_config_val "release_type" "apk")
+    CONFIG_keystore_file=$(get_config_val "keystore_file")
+    CONFIG_keystore_alias=$(get_config_val "keystore_alias")
+    CONFIG_keystore_pass=$(get_config_val "keystore_pass")
+    CONFIG_key_pass=$(get_config_val "key_pass")
     CONFIG_apk_path=$(get_config_val "apk_path")
     CONFIG_target_device=$(get_config_val "target_device")
     CONFIG_log_tags=$(get_config_val "log_tags")
@@ -165,6 +169,10 @@ load_config() {
     CONFIG_gradle_task="${CONFIG_gradle_task:-assembleDebug}"
     CONFIG_build_variant="${CONFIG_build_variant:-debug}"
     CONFIG_release_type="${CONFIG_release_type:-apk}"
+    CONFIG_keystore_file="${CONFIG_keystore_file:-}"
+    CONFIG_keystore_alias="${CONFIG_keystore_alias:-}"
+    CONFIG_keystore_pass="${CONFIG_keystore_pass:-}"
+    CONFIG_key_pass="${CONFIG_key_pass:-}"
     CONFIG_apk_path="${CONFIG_apk_path:-}"
     CONFIG_target_device="${CONFIG_target_device:-}"
     CONFIG_log_tags="${CONFIG_log_tags:-}"
@@ -435,20 +443,105 @@ action_build_release() {
     local out_dir=""
     if [[ "$r_type" == "aab" || "$r_type" == "bundle" || "$r_type" == "both" || "$r_type" == "all" ]]; then
       local out_aab=$(find "$CONFIG_project_dir" -maxdepth 6 -name "*.aab" 2>/dev/null | grep "/build/outputs/bundle/release" | xargs ls -t 2>/dev/null | head -1 || true)
-      [[ -n "$out_aab" ]] && log_info "Release Bundle: ${C_ACCENT}$out_aab${RESET}"
-      [[ -n "$out_aab" ]] && out_dir="$(dirname "$out_aab")"
+      if [[ -n "$out_aab" ]]; then
+        # Sign AAB if jarsigner available and keystore provided
+        if [[ -n "$CONFIG_keystore_file" && -f "$CONFIG_keystore_file" ]]; then
+          log_info "Signing release bundle with ${C_ACCENT}$(basename "$CONFIG_keystore_file")${RESET}..."
+          local jarsigner_bin=$(which jarsigner 2>/dev/null || echo "/usr/bin/jarsigner")
+          if [[ -x "$jarsigner_bin" ]]; then
+            "$jarsigner_bin" -keystore "$CONFIG_keystore_file" \
+              ${CONFIG_keystore_pass:+-storepass "$CONFIG_keystore_pass"} \
+              ${CONFIG_key_pass:+-keypass "$CONFIG_key_pass"} \
+              "$out_aab" "${CONFIG_keystore_alias:-upload}" >/dev/null 2>&1 || \
+            "$jarsigner_bin" -keystore "$CONFIG_keystore_file" "$out_aab" upload 2>/dev/null || true
+            log_success "Release Bundle signed."
+          fi
+        fi
+        log_info "Release Bundle: ${C_ACCENT}$out_aab${RESET}"
+        out_dir="$(dirname "$out_aab")"
+      fi
     fi
 
     if [[ "$r_type" == "apk" || "$r_type" == "both" || "$r_type" == "all" ]]; then
-      local out_apk=$(find "$CONFIG_project_dir" -maxdepth 6 -name "*release*.apk" 2>/dev/null | grep "/build/outputs/apk/release" | xargs ls -t 2>/dev/null | head -1 || true)
-      [[ -n "$out_apk" ]] && log_info "Release APK:    ${C_ACCENT}$out_apk${RESET}"
-      [[ -n "$out_apk" && -z "$out_dir" ]] && out_dir="$(dirname "$out_apk")"
+      local raw_apk=$(find "$CONFIG_project_dir" -maxdepth 6 -name "*release*.apk" 2>/dev/null | grep "/build/outputs/apk/release" | xargs ls -t 2>/dev/null | head -1 || true)
+      local final_apk="$raw_apk"
+
+      if [[ -n "$raw_apk" && -n "$CONFIG_keystore_file" && -f "$CONFIG_keystore_file" ]]; then
+        # Locate apksigner in SDK
+        local apksigner_bin=$(find "$HOME/Library/Android/sdk/build-tools" -name "apksigner" 2>/dev/null | sort -V | tail -1 || true)
+        local zipalign_bin=$(find "$HOME/Library/Android/sdk/build-tools" -name "zipalign" 2>/dev/null | sort -V | tail -1 || true)
+        
+        local apk_dir=$(dirname "$raw_apk")
+        local signed_apk="$apk_dir/app-release-signed.apk"
+
+        log_info "Signing release APK with ${C_ACCENT}$(basename "$CONFIG_keystore_file")${RESET}..."
+
+        if [[ -n "$zipalign_bin" && -x "$zipalign_bin" && "$raw_apk" == *"-unsigned.apk" ]]; then
+          local aligned_apk="$apk_dir/app-release-aligned.apk"
+          rm -f "$aligned_apk"
+          "$zipalign_bin" -p -f -v 4 "$raw_apk" "$aligned_apk" >/dev/null 2>&1 || cp "$raw_apk" "$aligned_apk"
+          raw_apk="$aligned_apk"
+        fi
+
+        if [[ -n "$apksigner_bin" && -x "$apksigner_bin" ]]; then
+          rm -f "$signed_apk"
+          local sign_success=0
+
+          if [[ -n "$CONFIG_keystore_pass" ]]; then
+            if "$apksigner_bin" sign --ks "$CONFIG_keystore_file" \
+                --ks-pass "pass:$CONFIG_keystore_pass" \
+                ${CONFIG_keystore_alias:+--ks-key-alias "$CONFIG_keystore_alias"} \
+                ${CONFIG_key_pass:+--key-pass "pass:$CONFIG_key_pass"} \
+                --out "$signed_apk" "$raw_apk" >/dev/null 2>&1; then
+              sign_success=1
+            fi
+          fi
+
+          # If not signed via config pass, prompt with retry loop
+          while [[ $sign_success -eq 0 ]]; do
+            echo -en "${C_PRIMARY}Enter Keystore Password for $(basename "$CONFIG_keystore_file"): ${RESET}"
+            read -rs entered_pass
+            echo ""
+
+            if [[ -z "$entered_pass" ]]; then
+              log_warn "Password cannot be empty."
+              continue
+            fi
+
+            local sign_output
+            sign_output=$("$apksigner_bin" sign --ks "$CONFIG_keystore_file" \
+              --ks-pass "pass:$entered_pass" \
+              ${CONFIG_keystore_alias:+--ks-key-alias "$CONFIG_keystore_alias"} \
+              --out "$signed_apk" "$raw_apk" 2>&1) && sign_success=1
+
+            if [[ $sign_success -eq 1 && -f "$signed_apk" ]]; then
+              break
+            else
+              log_error "Incorrect password or signing failed. Try again."
+            fi
+          done
+
+          if [[ $sign_success -eq 1 && -f "$signed_apk" ]]; then
+            final_apk="$signed_apk"
+            # Cleanup intermediate and unsigned files
+            rm -f "$apk_dir/app-release-aligned.apk"
+            rm -f "$apk_dir/app-release-unsigned.apk"
+            log_success "Release APK signed successfully."
+          fi
+        else
+          log_warn "'apksigner' not found in Android SDK. APK left as $raw_apk."
+        fi
+      fi
+
+      [[ -n "$final_apk" ]] && log_info "Release APK:    ${C_ACCENT}$final_apk${RESET}"
+      [[ -n "$final_apk" && -z "$out_dir" ]] && out_dir="$(dirname "$final_apk")"
     fi
 
     if [[ -n "$out_dir" && -d "$out_dir" ]]; then
       echo ""
-      echo -en "${C_PRIMARY}Open release directory in Finder? [y/N]: ${RESET}"
+      echo -en "${C_PRIMARY}Open release directory in Finder? [Y/n]: ${RESET}"
       read -r open_choice
+      open_choice="${open_choice:-Y}"
       if [[ "$open_choice" =~ ^[Yy]$ ]]; then
         open "$out_dir"
       fi
