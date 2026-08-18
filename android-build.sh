@@ -361,7 +361,7 @@ action_build() {
   local gradlew_bin="./gradlew"
   if [[ ! -f "$gradlew_bin" ]]; then
     log_error "No './gradlew' wrapper found in $CONFIG_project_dir!"
-    exit 1
+    return 1
   fi
 
   chmod +x "$gradlew_bin"
@@ -371,9 +371,10 @@ action_build() {
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
     log_success "Build completed successfully in ${BOLD}${duration}s${RESET}!"
+    return 0
   else
     log_error "Build failed."
-    exit 1
+    return 1
   fi
 }
 
@@ -384,13 +385,15 @@ action_install() {
 
   if [[ -z "$apk_file" || ! -f "$apk_file" ]]; then
     log_warn "No APK found. Triggering build first..."
-    action_build
+    if ! action_build; then
+      return 1
+    fi
     apk_file=$(find_built_apk "$CONFIG_project_dir")
   fi
 
   if [[ -z "$apk_file" || ! -f "$apk_file" ]]; then
     log_error "Could not find built APK file to install."
-    exit 1
+    return 1
   fi
 
   local apk_size=$(ls -lh "$apk_file" | awk '{print $5}')
@@ -399,9 +402,10 @@ action_install() {
   if adb_cmd install -r -d "$apk_file"; then
     log_success "App installed successfully!"
     action_launch
+    return 0
   else
     log_error "Installation failed."
-    exit 1
+    return 1
   fi
 }
 
@@ -409,7 +413,7 @@ action_launch() {
   select_device
   if [[ -z "$CONFIG_package_name" ]]; then
     log_error "package_name is not configured."
-    exit 1
+    return 1
   fi
 
   local component="$CONFIG_package_name"
@@ -431,10 +435,15 @@ action_launch() {
   log_success "App launched!"
 }
 
-action_restart() {
+action_stop() {
   select_device
   log_info "Force stopping $CONFIG_package_name..."
   adb_cmd shell am force-stop "$CONFIG_package_name"
+  log_success "App stopped."
+}
+
+action_restart() {
+  action_stop
   sleep 0.5
   action_launch
 }
@@ -445,7 +454,7 @@ action_clean() {
   local gradlew_bin="./gradlew"
   if [[ ! -f "$gradlew_bin" ]]; then
     log_error "No './gradlew' wrapper found in $CONFIG_project_dir!"
-    exit 1
+    return 1
   fi
   chmod +x "$gradlew_bin"
 
@@ -812,7 +821,7 @@ action_mirror() {
   select_device
   if ! command -v scrcpy >/dev/null 2>&1; then
     log_error "'scrcpy' is not installed. Install it via 'brew install scrcpy'."
-    exit 1
+    return 1
   fi
   log_info "Starting screen mirror for ${C_PRIMARY}$SELECTED_DEVICE${RESET}..."
   scrcpy -s "$SELECTED_DEVICE" --window-title "$CONFIG_project_name ($SELECTED_DEVICE)" --always-on-top >/dev/null 2>&1 &
@@ -823,17 +832,18 @@ action_logs() {
   select_device
   if [[ -z "$CONFIG_package_name" ]]; then
     log_error "package_name is not configured for logcat streaming."
-    exit 1
+    return 1
   fi
 
   echo -e "${BOLD}${C_PRIMARY}=== Live Logcat: ${C_ACCENT}$CONFIG_package_name${C_PRIMARY} on ${SELECTED_DEVICE} ===${RESET}"
   echo -e "${C_MUTED}Press Ctrl+C to stop.${RESET}\n"
 
-  # Trap Ctrl+C cleanly
-  trap 'echo -e "\n${C_MUTED}Logcat stopped.${RESET}"; exit 0' INT
+  # Trap Ctrl+C cleanly to return instead of exiting script
+  local interrupted=0
+  trap 'echo -e "\n${C_MUTED}Logcat stopped.${RESET}"; interrupted=1' INT
 
   # Stream logs and highlight PID/tags/levels
-  while true; do
+  while [[ $interrupted -eq 0 ]]; do
     # Get current PID
     local pid
     pid=$(adb_cmd shell pidof -s "$CONFIG_package_name" 2>/dev/null | tr -d '\r' || true)
@@ -870,15 +880,23 @@ action_logs() {
           echo -e "${C_MUTED}${line}${RESET}"
         fi
       done || true
+      if [[ $interrupted -eq 1 ]]; then
+        break
+      fi
       echo -e "${C_WARN}App process ended or crashed. Waiting for restart...${RESET}"
     fi
     sleep 1
   done
+  trap - INT
 }
 
 action_run_all() {
-  action_build
-  action_install
+  if ! action_build; then
+    return 1
+  fi
+  if ! action_install; then
+    return 1
+  fi
   action_launch
   echo ""
   action_logs
@@ -890,14 +908,15 @@ action_sync() {
   local gradlew_bin="./gradlew"
   if [[ ! -f "$gradlew_bin" ]]; then
     log_error "No './gradlew' wrapper found in $CONFIG_project_dir!"
-    exit 1
+    return 1
   fi
   chmod +x "$gradlew_bin"
   if "$gradlew_bin" help --daemon >/dev/null && "$gradlew_bin" tasks --daemon >/dev/null; then
     log_success "Gradle sync & daemon check complete!"
+    return 0
   else
     log_error "Gradle sync failed."
-    exit 1
+    return 1
   fi
 }
 
@@ -931,12 +950,12 @@ action_optimized_debug() {
 
   if [[ -z "$gradle_file" || ! -f "$gradle_file" ]]; then
     log_error "Could not locate app build.gradle(.kts) file."
-    exit 1
+    return 1
   fi
 
   if ! grep -q "optimized dev build" "$gradle_file"; then
     log_error "Optimized dev build pattern not found in $gradle_file."
-    exit 1
+    return 1
   fi
 
   log_info "Enabling optimized dev build configuration in $(basename "$gradle_file")..."
@@ -989,9 +1008,10 @@ with open(filepath, 'w') as f:
 
   if [[ $build_failed -ne 0 ]]; then
     log_error "Optimized debug build/install encountered errors."
-    exit 1
+    return 1
   else
     log_success "Optimized debug build & install complete!"
+    return 0
   fi
 }
 
@@ -1113,32 +1133,38 @@ show_dashboard() {
     
     read -rp "> " opt
     case "$opt" in
-      r|R|1) echo ""; action_run_all; read -rp "Press Enter to return..." ;;
-      i|I|2) echo ""; action_build && action_install; read -rp "Press Enter to return..." ;;
+      r|R|1) echo ""; action_run_all || true; read -rp "Press Enter to return..." ;;
+      i|I|2)
+        echo ""
+        if action_build; then
+          action_install || true
+        fi
+        read -rp "Press Enter to return..."
+        ;;
       o|O)
         if has_optimized_build_config; then
-          echo ""; action_optimized_debug; read -rp "Press Enter to return..."
+          echo ""; action_optimized_debug || true; read -rp "Press Enter to return..."
         else
           log_warn "Optimized dev build is not configured in this project." ; sleep 1
         fi
         ;;
-      l|L|3) echo ""; action_logs; read -rp "Press Enter to return..." ;;
-      f|F|5) echo ""; action_stop; sleep 1 ;;
-      s|S|4) echo ""; action_launch; sleep 1 ;;
-      m|M|7) echo ""; action_mirror; sleep 1 ;;
-      g|G) echo ""; action_sync; read -rp "Press Enter to return..." ;;
-      t|T) echo ""; action_format_code; read -rp "Press Enter to return..." ;;
-      c|C|6) echo ""; action_clean; read -rp "Press Enter to return..." ;;
-      b|B) echo ""; action_build_release; read -rp "Press Enter to return..." ;;
-      y|Y) echo ""; action_import_icons; read -rp "Press Enter to return..." ;;
-      w|W|8) echo ""; action_wireless_connect; read -rp "Press Enter to return..." ;;
+      l|L|3) echo ""; action_logs || true; read -rp "Press Enter to return..." ;;
+      f|F|5) echo ""; action_stop || true; sleep 1 ;;
+      s|S|4) echo ""; action_launch || true; sleep 1 ;;
+      m|M|7) echo ""; action_mirror || true; sleep 1 ;;
+      g|G) echo ""; action_sync || true; read -rp "Press Enter to return..." ;;
+      t|T) echo ""; action_format_code || true; read -rp "Press Enter to return..." ;;
+      c|C|6) echo ""; action_clean || true; read -rp "Press Enter to return..." ;;
+      b|B) echo ""; action_build_release || true; read -rp "Press Enter to return..." ;;
+      y|Y) echo ""; action_import_icons || true; read -rp "Press Enter to return..." ;;
+      w|W|8) echo ""; action_wireless_connect || true; read -rp "Press Enter to return..." ;;
       d|D) select_device "true" ;;
       p|P)
         select_project_interactive
         load_config "${CONFIG_FILE:-}"
         select_device
         ;;
-      e|E) action_open_editor; sleep 1 ;;
+      e|E) action_open_editor || true; sleep 1 ;;
       q|Q) exit 0 ;;
       *) log_warn "Invalid input." ; sleep 1 ;;
     esac
