@@ -76,6 +76,24 @@ detect_project() {
   fi
 }
 
+check_is_wear_project() {
+  local p_name="${1:-}"
+  local cfg_file="${2:-}"
+  local p_dir="${3:-}"
+
+  if [[ "$p_name" =~ [Ww]ear || "$cfg_file" =~ [Ww]ear || "$cfg_file" =~ schedule ]]; then
+    return 0
+  fi
+
+  if [[ -n "$p_dir" && -d "$p_dir" ]]; then
+    if grep -rq --include="*Manifest*.xml" "android.hardware.type.watch" "$p_dir" 2>/dev/null; then
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
 select_project_interactive() {
   local config_files=()
   while IFS= read -r f; do
@@ -98,9 +116,19 @@ select_project_interactive() {
   echo -e "Available Projects:"
   local i=1
   for cfg in "${config_files[@]}"; do
-    local p_name=$(grep -E "^[[:space:]]*project_name[[:space:]]*=" "$cfg" 2>/dev/null | head -1 | cut -d'=' -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || basename "$cfg" .android.config)
-    local p_pkg=$(grep -E "^[[:space:]]*package_name[[:space:]]*=" "$cfg" 2>/dev/null | head -1 | cut -d'=' -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || echo "")
-    printf "  ${BOLD}[%d]${RESET} %-15s ${C_MUTED}(%s)${RESET}\n" "$i" "$p_name" "$p_pkg"
+    local p_name=$(grep -E "^[[:space:]]*project_name[[:space:]]*=" "$cfg" 2>/dev/null | head -1 | cut -d'=' -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true)
+    [[ -z "$p_name" ]] && p_name=$(basename "$cfg" .android.config)
+    local p_pkg=$(grep -E "^[[:space:]]*package_name[[:space:]]*=" "$cfg" 2>/dev/null | head -1 | cut -d'=' -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true)
+    local p_dir=$(grep -E "^[[:space:]]*project_dir[[:space:]]*=" "$cfg" 2>/dev/null | head -1 | cut -d'=' -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true)
+    
+    local type_badge=""
+    if check_is_wear_project "$p_name" "$cfg" "$p_dir"; then
+      type_badge=" ${C_ACCENT}[WearOS]${RESET}"
+    else
+      type_badge=" ${C_PRIMARY}[Phone]${RESET}"
+    fi
+
+    printf "  ${BOLD}[%d]${RESET} %-24s%b ${C_MUTED}(%s)${RESET}\n" "$i" "$p_name" "$type_badge" "$p_pkg"
     ((i++))
   done
   echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"
@@ -1061,6 +1089,7 @@ get_project_details() {
   PROJECT_GIT_BRANCH=""
   PROJECT_SDK=""
   PROJECT_VERSION=""
+  PROJECT_TARGET_TYPE=""
 
   if [[ -d "$p_dir/.git" ]]; then
     PROJECT_GIT_BRANCH=$(git -C "$p_dir" branch --show-current 2>/dev/null || echo "")
@@ -1068,7 +1097,7 @@ get_project_details() {
 
   local gradle_file=$(find_app_gradle_file)
   if [[ -n "$gradle_file" && -f "$gradle_file" ]]; then
-    local compile_sdk=$(grep -E "compileSdk[[:space:]]*=[[:space:]]*[0-9]+" "$gradle_file" | head -1 | grep -oE "[0-9]+" || echo "")
+    local compile_sdk=$(grep -E "compileSdk([[:space:]]*=|[[:space:]]*\{[[:space:]]*version[[:space:]]*=([[:space:]]*release\()?)[[:space:]]*[0-9]+" "$gradle_file" | head -1 | grep -oE "[0-9]+" || echo "")
     local v_name=$(grep -E "versionName[[:space:]]*=[[:space:]]*\"" "$gradle_file" | head -1 | sed 's/.*"\(.*\)".*/\1/' || echo "")
     local v_code=$(grep -E "versionCode[[:space:]]*=[[:space:]]*[0-9]+" "$gradle_file" | head -1 | grep -oE "[0-9]+" || echo "")
     
@@ -1077,6 +1106,12 @@ get_project_details() {
       PROJECT_VERSION="v$v_name"
       [[ -n "$v_code" ]] && PROJECT_VERSION="$PROJECT_VERSION ($v_code)"
     fi
+  fi
+
+  if check_is_wear_project "$CONFIG_project_name" "${CONFIG_FILE:-}" "$p_dir"; then
+    PROJECT_TARGET_TYPE=" [WearOS]"
+  else
+    PROJECT_TARGET_TYPE=" [Phone]"
   fi
 }
 
@@ -1088,7 +1123,7 @@ show_dashboard() {
     clear
     echo -e "${BOLD}${C_PRIMARY}android-build${RESET}"
     echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"
-    echo -e "  ${BOLD}Project:${RESET}   ${C_ACCENT}${CONFIG_project_name}${RESET} ${C_MUTED}${PROJECT_VERSION}${RESET}"
+    echo -e "  ${BOLD}Project:${RESET}   ${C_ACCENT}${CONFIG_project_name}${RESET}${C_ACCENT}${PROJECT_TARGET_TYPE}${RESET} ${C_MUTED}${PROJECT_VERSION}${RESET}"
     echo -e "  ${BOLD}Package:${RESET}   ${C_PRIMARY}${CONFIG_package_name}${RESET}"
     if [[ -n "$PROJECT_GIT_BRANCH" || -n "$PROJECT_SDK" ]]; then
       echo -e "  ${BOLD}Branch:${RESET}    ${C_SUCCESS}${PROJECT_GIT_BRANCH:-main}${RESET}  ${C_MUTED}${PROJECT_SDK}${RESET}"

@@ -9,6 +9,15 @@
     {
       "path": "../jetpack-common",
     },
+    {
+      "path": "../TurboIMS",
+    },
+    {
+      "path": "../Schedule",
+    },
+    {
+      "path": ".",
+    },
   ],
   "settings": {},
 }
