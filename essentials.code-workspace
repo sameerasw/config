@@ -18,6 +18,27 @@
     {
       "path": ".",
     },
+    {
+      "path": "../Day",
+    },
+    {
+      "path": "../wear-os-samples",
+    },
+    {
+      "path": "../sameerasw.com",
+    },
+    {
+      "path": "../essentials-watchface",
+    },
+    {
+      "path": "../MeDrop",
+    },
+    {
+      "path": "../Cherrygram",
+    },
+    {
+      "path": "../Android-AGSL-Shader-Playground",
+    },
   ],
   "settings": {},
 }
