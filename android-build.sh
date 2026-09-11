@@ -187,6 +187,7 @@ load_config() {
     CONFIG_apk_path=$(get_config_val "apk_path")
     CONFIG_target_device=$(get_config_val "target_device")
     CONFIG_log_tags=$(get_config_val "log_tags")
+    CONFIG_java_home=$(get_config_val "java_home")
   else
     detect_project
     CONFIG_project_name="${CONFIG_project_name:-Essentials}"
@@ -204,6 +205,12 @@ load_config() {
     CONFIG_apk_path="${CONFIG_apk_path:-}"
     CONFIG_target_device="${CONFIG_target_device:-}"
     CONFIG_log_tags="${CONFIG_log_tags:-}"
+    CONFIG_java_home="${CONFIG_java_home:-}"
+  fi
+
+  if [[ -n "$CONFIG_java_home" && -d "$CONFIG_java_home" ]]; then
+    export JAVA_HOME="$CONFIG_java_home"
+    export PATH="$JAVA_HOME/bin:$PATH"
   fi
 }
 
@@ -1098,10 +1105,17 @@ get_project_details() {
   local gradle_file=$(find_app_gradle_file)
   if [[ -n "$gradle_file" && -f "$gradle_file" ]]; then
     local compile_sdk=$(grep -E "compileSdk([[:space:]]*=|[[:space:]]*\{[[:space:]]*version[[:space:]]*=([[:space:]]*release\()?)[[:space:]]*[0-9]+" "$gradle_file" | head -1 | grep -oE "[0-9]+" || echo "")
+    local compile_sdk_minor=$(grep -E "compileSdkMinor[[:space:]]*=[[:space:]]*[0-9]+" "$gradle_file" | head -1 | grep -oE "[0-9]+" || echo "")
     local v_name=$(grep -E "versionName[[:space:]]*=[[:space:]]*\"" "$gradle_file" | head -1 | sed 's/.*"\(.*\)".*/\1/' || echo "")
     local v_code=$(grep -E "versionCode[[:space:]]*=[[:space:]]*[0-9]+" "$gradle_file" | head -1 | grep -oE "[0-9]+" || echo "")
     
-    [[ -n "$compile_sdk" ]] && PROJECT_SDK="SDK $compile_sdk"
+    if [[ -n "$compile_sdk" ]]; then
+      if [[ -n "$compile_sdk_minor" ]]; then
+        PROJECT_SDK="SDK $compile_sdk.$compile_sdk_minor"
+      else
+        PROJECT_SDK="SDK $compile_sdk"
+      fi
+    fi
     if [[ -n "$v_name" ]]; then
       PROJECT_VERSION="v$v_name"
       [[ -n "$v_code" ]] && PROJECT_VERSION="$PROJECT_VERSION ($v_code)"
