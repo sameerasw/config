@@ -10,34 +10,22 @@
       "path": "../jetpack-common",
     },
     {
-      "path": "../TurboIMS",
-    },
-    {
-      "path": "../Schedule",
-    },
-    {
       "path": ".",
     },
     {
-      "path": "../Day",
-    },
-    {
-      "path": "../wear-os-samples",
-    },
-    {
-      "path": "../sameerasw.com",
+      "path": "../ShotonAndroid",
     },
     {
       "path": "../essentials-watchface",
     },
     {
-      "path": "../MeDrop",
+      "path": "../Schedule",
     },
     {
-      "path": "../Cherrygram",
+      "path": "../airsync-android",
     },
     {
-      "path": "../Android-AGSL-Shader-Playground",
+      "path": "../sameerasw.com",
     },
   ],
   "settings": {},

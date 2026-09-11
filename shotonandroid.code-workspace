@@ -1,0 +1,14 @@
+{
+  "folders": [
+    {
+      "path": "../ShotonAndroid"
+    },
+    {
+      "path": "../jetpack-common"
+    },
+    {
+      "path": "."
+    }
+  ],
+  "settings": {}
+}
