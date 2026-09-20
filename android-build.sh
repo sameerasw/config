@@ -1129,9 +1129,34 @@ get_project_details() {
   fi
 }
 
+prompt_reinstall_or_esc() {
+  echo ""
+  echo -en "${C_MUTED}Press ${BOLD}[Enter]${RESET}${C_MUTED} to re-install, or ${BOLD}[Esc]${RESET}${C_MUTED} to return...${RESET}"
+  while true; do
+    local key=""
+    IFS= read -rsn1 key || true
+    if [[ -z "$key" ]]; then
+      echo ""
+      return 0
+    elif [[ "$key" == $'\e' ]]; then
+      local rest=""
+      read -rsn2 -t 1 rest || true
+      if [[ -z "$rest" ]]; then
+        echo ""
+        return 1
+      fi
+    fi
+  done
+}
+
 # --- Interactive TUI Dashboard ---
 show_dashboard() {
   select_device
+  set -o history
+  history -c
+  local hist_file="$HOME/.android_build_history"
+  [[ -f "$hist_file" ]] && history -r "$hist_file" 2>/dev/null || true
+
   while true; do
     get_project_details
     clear
@@ -1180,19 +1205,30 @@ show_dashboard() {
     echo -e "  ${BOLD}[Q]${RESET} Quit"
     echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"
     
-    read -rp "> " opt
+    read -e -rp "> " opt
+    if [[ -n "$opt" ]]; then
+      history -s "$opt"
+      history -w "$hist_file" 2>/dev/null || true
+    fi
+
     case "$opt" in
       r|R|1) echo ""; action_run_all || true; read -rp "Press Enter to return..." ;;
       i|I|2)
-        echo ""
-        if action_build; then
-          action_install || true
-        fi
-        read -rp "Press Enter to return..."
+        while true; do
+          echo ""
+          if action_build; then
+            action_install || true
+          fi
+          prompt_reinstall_or_esc || break
+        done
         ;;
       o|O)
         if has_optimized_build_config; then
-          echo ""; action_optimized_debug || true; read -rp "Press Enter to return..."
+          while true; do
+            echo ""
+            action_optimized_debug || true
+            prompt_reinstall_or_esc || break
+          done
         else
           log_warn "Optimized dev build is not configured in this project." ; sleep 1
         fi
