@@ -94,10 +94,11 @@ gradle_task=assembleGithubDebug
 # Offered by [B] Release build
 release_flavors=github,play
 release_type_github=apk
-release_type_play=aab
+release_type_play=both
 ```
 
 - `[B]` / `release` asks which flavor to build (`[A]` builds all of them) and runs `assemble<Flavor>Release` or `bundle<Flavor>Release` per `release_type_<flavor>`, falling back to `release_type`.
+- `release_type_<flavor>` can be `apk`, `aab` or `both`.
 - Artifacts are signed with the project keystore, and the keystore password is asked once for all flavors.
 - Signed APKs are named `app-<flavor>-release.apk` (for example `app-github-release.apk`).
 - `[O]` Optimized debug also asks which flavor to build (it runs `assemble<Flavor>Debug` with the optimized settings) when `release_flavors` is set.
