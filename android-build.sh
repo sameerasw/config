@@ -180,6 +180,7 @@ load_config() {
     CONFIG_gradle_task=$(get_config_val "gradle_task" "assembleDebug")
     CONFIG_build_variant=$(get_config_val "build_variant" "debug")
     CONFIG_release_type=$(get_config_val "release_type" "apk")
+    CONFIG_release_flavors=$(get_config_val "release_flavors")
     CONFIG_keystore_file=$(get_config_val "keystore_file")
     CONFIG_keystore_alias=$(get_config_val "keystore_alias")
     CONFIG_keystore_pass=$(get_config_val "keystore_pass")
@@ -198,6 +199,7 @@ load_config() {
     CONFIG_gradle_task="${CONFIG_gradle_task:-assembleDebug}"
     CONFIG_build_variant="${CONFIG_build_variant:-debug}"
     CONFIG_release_type="${CONFIG_release_type:-apk}"
+    CONFIG_release_flavors="${CONFIG_release_flavors:-}"
     CONFIG_keystore_file="${CONFIG_keystore_file:-}"
     CONFIG_keystore_alias="${CONFIG_keystore_alias:-}"
     CONFIG_keystore_pass="${CONFIG_keystore_pass:-}"
@@ -379,9 +381,9 @@ find_built_apk() {
 
   # Auto find newest APK matching variant inside outputs/apk
   local found
-  found=$(find "$project_path" -maxdepth 6 -name "*-${CONFIG_build_variant}.apk" 2>/dev/null | grep "/build/outputs/apk/" | xargs ls -t 2>/dev/null | head -1 || true)
+  found=$(find "$project_path" -maxdepth 8 -name "*-${CONFIG_build_variant}.apk" 2>/dev/null | grep "/build/outputs/apk/" | xargs ls -t 2>/dev/null | head -1 || true)
   if [[ -z "$found" ]]; then
-    found=$(find "$project_path" -maxdepth 6 -name "*.apk" 2>/dev/null | grep "/build/outputs/apk/" | xargs ls -t 2>/dev/null | head -1 || true)
+    found=$(find "$project_path" -maxdepth 8 -name "*.apk" 2>/dev/null | grep "/build/outputs/apk/" | xargs ls -t 2>/dev/null | head -1 || true)
   fi
   if [[ -z "$found" ]]; then
     found=$(find "$project_path" -maxdepth 7 -name "*.apk" 2>/dev/null | xargs ls -t 2>/dev/null | head -1 || true)
@@ -498,7 +500,58 @@ action_clean() {
   log_success "Clean completed & daemons stopped."
 }
 
+# Builds release artifacts. With `release_flavors` set in the config, asks which flavor(s) to build.
 action_build_release() {
+  local flavors=()
+  if [[ -z "${CONFIG_release_flavors:-}" ]]; then
+    flavors=("")
+  else
+    local all_flavors=()
+    IFS=',' read -r -a all_flavors <<< "$CONFIG_release_flavors"
+    if (( ${#all_flavors[@]} == 1 )); then
+      flavors=("${all_flavors[0]}")
+    else
+      echo -e "\n${BOLD}${C_PRIMARY}=== Release flavor ===${RESET}"
+      local i=1
+      for f in "${all_flavors[@]}"; do
+        echo -e "  ${BOLD}[$i]${RESET} $f"
+        i=$((i + 1))
+      done
+      echo -e "  ${BOLD}[A]${RESET} all"
+      echo -en "${C_PRIMARY}Choose [A]: ${RESET}"
+      local choice
+      read -r choice
+      choice="${choice:-A}"
+      if [[ "$choice" =~ ^[Aa]$ ]]; then
+        flavors=("${all_flavors[@]}")
+      elif [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#all_flavors[@]} )); then
+        flavors=("${all_flavors[$((choice - 1))]}")
+      else
+        log_error "Invalid choice."
+        return 1
+      fi
+    fi
+  fi
+
+  local flavor
+  for flavor in "${flavors[@]}"; do
+    action_build_release_flavor "$flavor" || return 1
+  done
+}
+
+action_build_release_flavor() {
+  local flavor="${1:-}"
+  local cap=""
+  local apk_sub="release"
+  local bundle_sub="release"
+  local out_name="app-release"
+  if [[ -n "$flavor" ]]; then
+    cap="$(printf '%s' "$flavor" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')"
+    apk_sub="$flavor/release"
+    bundle_sub="${flavor}Release"
+    out_name="app-${flavor}-release"
+    log_info "Release flavor: ${BOLD}${flavor}${RESET}"
+  fi
   cd "$CONFIG_project_dir"
   local gradlew_bin="./gradlew"
   if [[ ! -f "$gradlew_bin" ]]; then
@@ -508,16 +561,19 @@ action_build_release() {
   chmod +x "$gradlew_bin"
 
   local r_type="${CONFIG_release_type:-apk}"
+  if [[ -n "$flavor" ]]; then
+    r_type="$(get_config_val "release_type_${flavor}" "$r_type")"
+  fi
   local tasks=()
   case "$r_type" in
     aab|bundle)
-      tasks=("bundleRelease")
+      tasks=("bundle${cap}Release")
       ;;
     both|all)
-      tasks=("assembleRelease" "bundleRelease")
+      tasks=("assemble${cap}Release" "bundle${cap}Release")
       ;;
     apk|*)
-      tasks=("assembleRelease")
+      tasks=("assemble${cap}Release")
       ;;
   esac
 
@@ -558,6 +614,9 @@ action_build_release() {
     done
   fi
 
+  CONFIG_keystore_pass="$cached_pass"
+  CONFIG_keystore_alias="$alias_name"
+
   log_info "Starting Release build in ${C_MUTED}$CONFIG_project_dir${RESET}..."
   local start_time=$(date +%s)
   log_info "Running Gradle task(s): ${BOLD}${tasks[*]}${RESET}..."
@@ -569,7 +628,7 @@ action_build_release() {
     local out_dir=""
 
     if [[ "$r_type" == "aab" || "$r_type" == "bundle" || "$r_type" == "both" || "$r_type" == "all" ]]; then
-      local out_aab=$(find "$CONFIG_project_dir" -maxdepth 6 -name "*.aab" 2>/dev/null | grep "/build/outputs/bundle/release" | xargs ls -t 2>/dev/null | head -1 || true)
+      local out_aab=$(find "$CONFIG_project_dir" -maxdepth 8 -name "*.aab" 2>/dev/null | grep "/build/outputs/bundle/${bundle_sub}" | xargs ls -t 2>/dev/null | head -1 || true)
       if [[ -n "$out_aab" ]]; then
         # Sign AAB if jarsigner available and keystore provided
         if [[ -n "$CONFIG_keystore_file" && -f "$CONFIG_keystore_file" ]]; then
@@ -589,7 +648,7 @@ action_build_release() {
     fi
 
     if [[ "$r_type" == "apk" || "$r_type" == "both" || "$r_type" == "all" ]]; then
-      local raw_apk=$(find "$CONFIG_project_dir" -maxdepth 6 -name "*release*.apk" ! -name "*.tmp.apk" ! -name "*-aligned.apk" 2>/dev/null | grep "/build/outputs/apk/release" | xargs ls -t 2>/dev/null | head -1 || true)
+      local raw_apk=$(find "$CONFIG_project_dir" -maxdepth 8 -name "*release*.apk" ! -name "*.tmp.apk" ! -name "*-aligned.apk" 2>/dev/null | grep "/build/outputs/apk/${apk_sub}" | xargs ls -t 2>/dev/null | head -1 || true)
       local final_apk="$raw_apk"
 
       if [[ -n "$raw_apk" && -n "$CONFIG_keystore_file" && -f "$CONFIG_keystore_file" ]]; then
@@ -598,14 +657,14 @@ action_build_release() {
         local zipalign_bin=$(find "$HOME/Library/Android/sdk/build-tools" -name "zipalign" 2>/dev/null | sort -V | tail -1 || true)
         
         local apk_dir=$(dirname "$raw_apk")
-        local final_target_apk="$apk_dir/app-release.apk"
-        local temp_signed_apk="$apk_dir/app-release-signed.tmp.apk"
+        local final_target_apk="$apk_dir/${out_name}.apk"
+        local temp_signed_apk="$apk_dir/${out_name}-signed.tmp.apk"
 
         log_info "Signing release APK with ${C_ACCENT}$(basename "$CONFIG_keystore_file")${RESET}..."
 
         local to_sign="$raw_apk"
         if [[ -n "$zipalign_bin" && -x "$zipalign_bin" && "$raw_apk" == *"-unsigned.apk" ]]; then
-          local aligned_apk="$apk_dir/app-release-aligned.tmp.apk"
+          local aligned_apk="$apk_dir/${out_name}-aligned.tmp.apk"
           rm -f "$aligned_apk"
           if "$zipalign_bin" -p -f -v 4 "$raw_apk" "$aligned_apk" >/dev/null 2>&1 && [[ -s "$aligned_apk" ]]; then
             to_sign="$aligned_apk"
@@ -634,8 +693,8 @@ action_build_release() {
           done
 
           if [[ $sign_success -eq 1 && -f "$temp_signed_apk" ]]; then
-            rm -f "$apk_dir/app-release-aligned.tmp.apk"
-            rm -f "$apk_dir/app-release-unsigned.apk"
+            rm -f "$apk_dir/${out_name}-aligned.tmp.apk"
+            rm -f "$apk_dir/${out_name}-unsigned.apk"
             rm -f "$final_target_apk"
             mv "$temp_signed_apk" "$final_target_apk"
             final_apk="$final_target_apk"
@@ -979,17 +1038,58 @@ has_optimized_build_config() {
   return 1
 }
 
+# Asks which product flavor to use for a debug build; empty result means no flavors are configured.
+choose_debug_flavor() {
+  if [[ -z "${CONFIG_release_flavors:-}" ]]; then
+    return 0
+  fi
+  local all_flavors=()
+  IFS=',' read -r -a all_flavors <<< "$CONFIG_release_flavors"
+  if (( ${#all_flavors[@]} == 1 )); then
+    echo "${all_flavors[0]}"
+    return 0
+  fi
+  echo -e "\n${BOLD}${C_PRIMARY}=== Build flavor ===${RESET}" >&2
+  local i=1
+  for f in "${all_flavors[@]}"; do
+    echo -e "  ${BOLD}[$i]${RESET} $f" >&2
+    i=$((i + 1))
+  done
+  echo -en "${C_PRIMARY}Choose [1]: ${RESET}" >&2
+  local choice
+  read -r choice
+  choice="${choice:-1}"
+  if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#all_flavors[@]} )); then
+    echo "${all_flavors[$((choice - 1))]}"
+    return 0
+  fi
+  log_error "Invalid choice." >&2
+  return 1
+}
+
 action_optimized_debug() {
   local gradle_file
   gradle_file=$(find_app_gradle_file)
 
+  local flavor=""
+  flavor=$(choose_debug_flavor) || return 1
+  local original_task="$CONFIG_gradle_task"
+  if [[ -n "$flavor" ]]; then
+    local cap
+    cap="$(printf '%s' "$flavor" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')"
+    CONFIG_gradle_task="assemble${cap}Debug"
+    log_info "Flavor: ${BOLD}${flavor}${RESET}"
+  fi
+
   if [[ -z "$gradle_file" || ! -f "$gradle_file" ]]; then
     log_error "Could not locate app build.gradle(.kts) file."
+    CONFIG_gradle_task="$original_task"
     return 1
   fi
 
   if ! grep -q "optimized dev build" "$gradle_file"; then
     log_error "Optimized dev build pattern not found in $gradle_file."
+    CONFIG_gradle_task="$original_task"
     return 1
   fi
 
@@ -1040,6 +1140,7 @@ with open(filepath, 'w') as f:
   # Explicitly restore and remove trap
   cleanup_optimized_block
   trap - EXIT INT TERM HUP
+  CONFIG_gradle_task="$original_task"
 
   if [[ $build_failed -ne 0 ]]; then
     log_error "Optimized debug build/install encountered errors."

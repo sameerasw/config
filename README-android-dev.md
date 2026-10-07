@@ -79,3 +79,26 @@ Runs `ktlint` (auto-installed on first run to `~/.cache/android-build/ktlint`):
 1. **`[1] Modified files only`** *(Fastest - only formats files in your current `git status`)*
 2. **`[2] Entire project`** *(Formats all `*.kt` and `*.kts` files)*
 3. **`[3] Specific directory / file`** *(Target specific paths)*
+
+
+---
+
+## Product Flavors
+
+Projects with product flavors (for example Overcast: `github` and `play`) can list them in the config:
+
+```ini
+# Development builds use one flavor
+gradle_task=assembleGithubDebug
+
+# Offered by [B] Release build
+release_flavors=github,play
+release_type_github=apk
+release_type_play=aab
+```
+
+- `[B]` / `release` asks which flavor to build (`[A]` builds all of them) and runs `assemble<Flavor>Release` or `bundle<Flavor>Release` per `release_type_<flavor>`, falling back to `release_type`.
+- Artifacts are signed with the project keystore, and the keystore password is asked once for all flavors.
+- Signed APKs are named `app-<flavor>-release.apk` (for example `app-github-release.apk`).
+- `[O]` Optimized debug also asks which flavor to build (it runs `assemble<Flavor>Debug` with the optimized settings) when `release_flavors` is set.
+- Without `release_flavors` the script behaves exactly as before.
