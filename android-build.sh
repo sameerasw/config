@@ -1351,10 +1351,31 @@ show_dashboard() {
         select_device
         ;;
       e|E) action_open_editor || true; sleep 1 ;;
-      q|Q) exit 0 ;;
+      q|Q) quit_and_cleanup ;;
       *) log_warn "Invalid input." ; sleep 1 ;;
     esac
   done
+}
+
+# Kills leftover Gradle/Kotlin daemons and other java processes, sparing apps inside .app bundles (Android Studio etc.).
+quit_and_cleanup() {
+  local pids=()
+  local pid cmd
+  while read -r pid; do
+    [[ -z "$pid" ]] && continue
+    cmd=$(ps -o command= -p "$pid" 2>/dev/null) || continue
+    [[ "$cmd" == *".app/Contents/"* ]] && continue
+    pids+=("$pid")
+  done < <(pgrep -x java)
+  if (( ${#pids[@]} > 0 )); then
+    echo -e "${C_MUTED}Stopping ${#pids[@]} java process(es)...${RESET}"
+    kill "${pids[@]}" 2>/dev/null || true
+    sleep 2
+    for pid in "${pids[@]}"; do
+      kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+    done
+  fi
+  exit 0
 }
 
 # --- Help & Parsing ---
