@@ -1247,7 +1247,7 @@ apk_badging_value() {
   local aapt_bin
   aapt_bin=$(find "$HOME/Library/Android/sdk/build-tools" -name "aapt2" -o -name "aapt" 2>/dev/null | sort -V | tail -1 || true)
   [[ -n "$aapt_bin" && -x "$aapt_bin" ]] || return 0
-  "$aapt_bin" dump badging "$apk" 2>/dev/null | head -1 | grep -oE "${field}='[^']*'" | cut -d"'" -f2 || true
+  "$aapt_bin" dump badging "$apk" 2>/dev/null | head -1 | grep -oE "(^| )${field}='[^']*'" | head -1 | cut -d"'" -f2 || true
 }
 
 apk_field_value() {
@@ -1286,9 +1286,9 @@ build_changelog_caption() {
   local -a range=(HEAD)
   if [[ -n "$last_tag" ]]; then
     range=(HEAD --not --tags)
-    title="📝 <b>Changes since $(html_escape "$last_tag")</b>"
+    title="<b>Changes since $(html_escape "$last_tag")</b>"
   else
-    title="📝 <b>Recent changes</b>"
+    title="<b>Recent changes</b>"
   fi
 
   local -a lines=()
@@ -1301,20 +1301,22 @@ build_changelog_caption() {
 
   (( ${#lines[@]} == 0 )) && return 0
 
-  local body=$'\n\n'"$title"
+  local body=$'\n\n'"$title"$'\n'"<blockquote>"
   local total=${#lines[@]} shown=0 i line more
   for (( i = 0; i < total; i++ )); do
     line="${lines[$i]}"
     more=""
     (( i + 1 < total )) && more=$'\n'"$(older_commits_label $(( total - i - 1 )))"
-    if (( ${#head} + ${#body} + 1 + ${#line} + ${#more} > limit )); then
+    if (( ${#head} + ${#body} + 1 + ${#line} + ${#more} + 13 > limit )); then
       break
     fi
-    body+=$'\n'"$line"
+    (( shown > 0 )) && body+=$'\n'
+    body+="$line"
     shown=$(( shown + 1 ))
   done
   (( shown == 0 )) && return 0
   (( shown < total )) && body+=$'\n'"$(older_commits_label $(( total - shown )))"
+  body+="</blockquote>"
   printf '%s' "$body"
 }
 
@@ -1356,13 +1358,14 @@ send_apk_to_tidwib() {
   commit=$(git -C "$CONFIG_project_dir" rev-parse --short HEAD 2>/dev/null || true)
   built_at=$(date -r "$apk" "+%Y-%m-%d %H:%M %Z")
 
-  local caption="📦 <b>${CONFIG_project_name}</b>"
-  [[ -n "$version_name" ]] && caption+=" v${version_name}"
-  [[ -n "$version_code" ]] && caption+=" (${version_code})"
-  caption+=$'\n'"🏷 Release${flavor:+ · ${flavor}}"
-  caption+=$'\n'"🕒 ${built_at}"
-  [[ -n "$min_sdk" ]] && caption+=$'\n'"📱 Android SDK ${min_sdk}+${target_sdk:+ (target ${target_sdk})}"
-  [[ -n "$branch" ]] && caption+=$'\n'"🌿 <code>${branch}@${commit}</code>"
+  local title_line="${CONFIG_project_name}"
+  [[ -n "$version_name" ]] && title_line+=" v${version_name}"
+  [[ -n "$version_code" ]] && title_line+=" (${version_code})"
+  local caption="<b><u>$(html_escape "$title_line")</u></b>"
+  local source_line="Release${flavor:+ (${flavor})}"
+  [[ -n "$branch" ]] && source_line+=" from ${branch}@${commit}"
+  caption+=$'\n'"<i>$(html_escape "$source_line")</i>"
+  caption+=$'\n'"${built_at}"
   caption+=$(build_changelog_caption "$caption")
 
   echo ""
@@ -1381,10 +1384,10 @@ send_apk_to_tidwib() {
   local stats=""
   stats=$(curl --progress-bar -X POST "https://api.telegram.org/bot${token}/sendDocument" \
     -o "$resp_file" -w '%{http_code} %{time_total} %{speed_upload}' \
-    -F "chat_id=${chat_id}" \
-    ${topic_id:+-F "message_thread_id=${topic_id}"} \
-    -F "parse_mode=HTML" \
-    -F "caption=${caption}" \
+    --form-string "chat_id=${chat_id}" \
+    ${topic_id:+--form-string "message_thread_id=${topic_id}"} \
+    --form-string "parse_mode=HTML" \
+    --form-string "caption=${caption}" \
     -F "document=@${apk};type=application/vnd.android.package-archive") || true
   local response
   response=$(cat "$resp_file" 2>/dev/null || true)
@@ -1412,8 +1415,7 @@ prompt_release_output() {
   local out_dir="$1" apk="${2:-}" flavor="${3:-}"
   while true; do
     # Drop keys typed while the previous action ran so they can't trigger Finder or another upload.
-    local junk=""
-    while IFS= read -rsn1 -t 0.05 junk; do :; done
+    perl -MPOSIX -e 'tcflush(0, TCIFLUSH)' 2>/dev/null || true
     echo ""
     if [[ -n "$apk" ]]; then
       echo -en "${C_MUTED}Press ${BOLD}[Enter]${RESET}${C_MUTED} to open in Finder, ${BOLD}[T]${RESET}${C_MUTED} to send to TIDWIB chat, or ${BOLD}[Esc]${RESET}${C_MUTED} to return...${RESET}"
