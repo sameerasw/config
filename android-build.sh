@@ -397,6 +397,105 @@ find_built_apk() {
   echo "$found"
 }
 
+# --- Mac stats during Gradle builds ---
+mac_thermal_state() {
+  local therm limit
+  therm=$(pmset -g therm 2>/dev/null || true)
+  limit=$(echo "$therm" | grep -oE "CPU_Speed_Limit[[:space:]]*=[[:space:]]*[0-9]+" | grep -oE "[0-9]+$" || true)
+  if [[ -n "$limit" && "$limit" -lt 100 ]]; then
+    echo "Throttled ${limit}%"
+  elif echo "$therm" | grep -qiE "thermal warning level[^0-9]*[1-9]"; then
+    echo "Warm"
+  else
+    echo "Nominal"
+  fi
+}
+
+# Prints: thermal|load|cpus|mem_free_pct|java_cpu|java_rss_mb
+mac_stats_snapshot() {
+  local thermal load cpus mem java
+  thermal=$(mac_thermal_state)
+  load=$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')
+  cpus=$(sysctl -n hw.ncpu 2>/dev/null || echo 1)
+  mem=$(memory_pressure -Q 2>/dev/null | grep -oE "[0-9]+%" | tr -d '%' || true)
+  java=$(ps -axo pcpu=,rss=,comm= 2>/dev/null | awk '$3 ~ /java$/ { c += $1; r += $2 } END { printf "%.0f|%.0f", c, r / 1024 }')
+  echo "${thermal}|${load}|${cpus}|${mem}|${java}"
+}
+
+run_gradle_with_stats() {
+  if [[ ! -t 1 ]]; then
+    "$@"
+    return $?
+  fi
+
+  local work fifo status_file
+  work=$(mktemp -d)
+  fifo="$work/out"
+  status_file="$work/status"
+  mkfifo "$fifo"
+
+  (
+    "$@" 2>&1 | while IFS= read -r line || [[ -n "$line" ]]; do printf '%s\n' "$line"; done
+    echo "${PIPESTATUS[0]}" > "$status_file"
+    printf '\001DONE\n'
+  ) > "$fifo" &
+  local gradle_pid=$!
+  ( while true; do printf '\001TICK\n'; sleep 2; done ) > "$fifo" 2>/dev/null &
+  local tick_pid=$!
+  disown "$tick_pid" 2>/dev/null || true
+
+  local start snap="" status_text="" line
+  local worst="Nominal" peak_load=0 peak_rss=0
+  start=$(date +%s)
+
+  cleanup_stats() {
+    kill "$tick_pid" "$gradle_pid" 2>/dev/null || true
+    printf '\r\033[2K'
+    rm -rf "$work"
+  }
+  trap 'cleanup_stats; trap - INT; kill -INT $$' INT
+
+  draw_status() {
+    local cols thermal load cpus mem jcpu jrss text
+    cols=$(tput cols 2>/dev/null || echo 80)
+    IFS='|' read -r thermal load cpus mem jcpu jrss <<< "$snap"
+    text=" ⏱ $(( $(date +%s) - start ))s  Thermal ${thermal:-?}  Load ${load:-?}/${cpus:-?}  Mem free ${mem:-?}%  Java ${jcpu:-0}% CPU · ${jrss:-0} MB "
+    (( ${#text} > cols - 1 )) && text="${text:0:$(( cols - 1 ))}"
+    local color="$C_SUCCESS"
+    [[ "${thermal:-Nominal}" != "Nominal" ]] && color="$C_WARN"
+    [[ "${thermal:-}" == Throttled* ]] && color="$C_ERROR"
+    printf '\r\033[2K%b%s%b' "${C_BG_CARD}${color}" "$text" "$RESET"
+  }
+
+  exec 3< "$fifo"
+  while IFS= read -r line <&3; do
+    case "$line" in
+      $'\001DONE') break ;;
+      $'\001TICK')
+        snap=$(mac_stats_snapshot)
+        local t l r
+        IFS='|' read -r t l _ _ _ r <<< "$snap"
+        awk -v a="$l" -v b="$peak_load" 'BEGIN { exit !(a > b) }' && peak_load="$l"
+        (( ${r:-0} > peak_rss )) && peak_rss="${r:-0}"
+        [[ "$t" != "Nominal" ]] && worst="$t"
+        ;;
+      *) printf '\r\033[2K%s\n' "$line" ;;
+    esac
+    draw_status
+  done
+  exec 3<&-
+
+  kill "$tick_pid" 2>/dev/null || true
+  wait "$gradle_pid" 2>/dev/null || true
+  local status=1
+  [[ -s "$status_file" ]] && status=$(cat "$status_file")
+  trap - INT
+  printf '\r\033[2K'
+  rm -rf "$work"
+  echo -e "${C_MUTED}Mac during build: thermal ${worst}, peak load ${peak_load}, peak Java memory ${peak_rss} MB${RESET}"
+  return "$status"
+}
+
 action_build() {
   log_info "Starting Gradle build: ${BOLD}$CONFIG_gradle_task${RESET} in ${C_MUTED}$CONFIG_project_dir${RESET}..."
   cd "$CONFIG_project_dir"
@@ -410,7 +509,7 @@ action_build() {
   chmod +x "$gradlew_bin"
   local start_time=$(date +%s)
 
-  if "$gradlew_bin" "$CONFIG_gradle_task" --daemon; then
+  if run_gradle_with_stats "$gradlew_bin" "$CONFIG_gradle_task" --daemon; then
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
     log_success "Build completed successfully in ${BOLD}${duration}s${RESET}!"
@@ -627,7 +726,7 @@ action_build_release_flavor() {
   log_info "Starting Release build in ${C_MUTED}$CONFIG_project_dir${RESET}..."
   local start_time=$(date +%s)
   log_info "Running Gradle task(s): ${BOLD}${tasks[*]}${RESET}..."
-  if "$gradlew_bin" "${tasks[@]}" --daemon; then
+  if run_gradle_with_stats "$gradlew_bin" "${tasks[@]}" --daemon; then
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
     log_success "Release build completed in ${BOLD}${duration}s${RESET}!"
