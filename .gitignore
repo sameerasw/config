@@ -40,3 +40,5 @@ Library/Preferences/com.apple.security*
 __pycache__/
 *.pyc
 
+# Secrets
+.env

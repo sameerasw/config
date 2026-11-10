@@ -9,6 +9,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_CONFIG="essentials.android.config"
+DEFAULT_TELEGRAM_CHAT_ID="-1001653455300"
+DEFAULT_TELEGRAM_TOPIC_ID="71368"
 
 # --- Styling & Colors ---
 RESET="\033[0m"
@@ -189,6 +191,8 @@ load_config() {
     CONFIG_target_device=$(get_config_val "target_device")
     CONFIG_log_tags=$(get_config_val "log_tags")
     CONFIG_java_home=$(get_config_val "java_home")
+    CONFIG_telegram_chat_id=$(get_config_val "telegram_chat_id" "$DEFAULT_TELEGRAM_CHAT_ID")
+    CONFIG_telegram_topic_id=$(get_config_val "telegram_topic_id" "$DEFAULT_TELEGRAM_TOPIC_ID")
   else
     detect_project
     CONFIG_project_name="${CONFIG_project_name:-Essentials}"
@@ -208,6 +212,8 @@ load_config() {
     CONFIG_target_device="${CONFIG_target_device:-}"
     CONFIG_log_tags="${CONFIG_log_tags:-}"
     CONFIG_java_home="${CONFIG_java_home:-}"
+    CONFIG_telegram_chat_id="${CONFIG_telegram_chat_id:-$DEFAULT_TELEGRAM_CHAT_ID}"
+    CONFIG_telegram_topic_id="${CONFIG_telegram_topic_id:-$DEFAULT_TELEGRAM_TOPIC_ID}"
   fi
 
   if [[ -n "$CONFIG_java_home" && -d "$CONFIG_java_home" ]]; then
@@ -540,6 +546,7 @@ action_build_release() {
 }
 
 action_build_release_flavor() {
+  local built_apk=""
   local flavor="${1:-}"
   local cap=""
   local apk_sub="release"
@@ -706,17 +713,12 @@ action_build_release_flavor() {
       fi
 
       [[ -n "$final_apk" ]] && log_info "Release APK:    ${C_ACCENT}$final_apk${RESET}"
+      [[ -n "$final_apk" && -f "$final_apk" ]] && built_apk="$final_apk"
       [[ -n "$final_apk" && -z "$out_dir" ]] && out_dir="$(dirname "$final_apk")"
     fi
 
     if [[ -n "$out_dir" && -d "$out_dir" ]]; then
-      echo ""
-      echo -en "${C_PRIMARY}Open release directory in Finder? [Y/n]: ${RESET}"
-      read -r open_choice
-      open_choice="${open_choice:-Y}"
-      if [[ "$open_choice" =~ ^[Yy]$ ]]; then
-        open "$out_dir"
-      fi
+      prompt_release_output "$out_dir" "$built_apk" "$flavor"
     fi
   else
     log_error "Release build failed."
@@ -1228,6 +1230,163 @@ get_project_details() {
   else
     PROJECT_TARGET_TYPE=" [Phone]"
   fi
+}
+
+# --- Telegram (TIDWIB) ---
+load_env_secrets() {
+  local env_file="$SCRIPT_DIR/.env"
+  [[ -f "$env_file" ]] || return 0
+  set -a
+  # shellcheck disable=SC1090
+  source "$env_file"
+  set +a
+}
+
+apk_badging_value() {
+  local apk="$1" field="$2"
+  local aapt_bin
+  aapt_bin=$(find "$HOME/Library/Android/sdk/build-tools" -name "aapt2" -o -name "aapt" 2>/dev/null | sort -V | tail -1 || true)
+  [[ -n "$aapt_bin" && -x "$aapt_bin" ]] || return 0
+  "$aapt_bin" dump badging "$apk" 2>/dev/null | head -1 | grep -oE "${field}='[^']*'" | cut -d"'" -f2 || true
+}
+
+apk_field_value() {
+  local apk="$1" field="$2"
+  local aapt_bin
+  aapt_bin=$(find "$HOME/Library/Android/sdk/build-tools" -name "aapt2" -o -name "aapt" 2>/dev/null | sort -V | tail -1 || true)
+  [[ -n "$aapt_bin" && -x "$aapt_bin" ]] || return 0
+  local key="$field"
+  [[ "$field" == "minSdkVersion" ]] && key="sdkVersion"
+  "$aapt_bin" dump badging "$apk" 2>/dev/null | grep -E "^${key}:'" | head -1 | cut -d"'" -f2 || true
+}
+
+send_apk_to_tidwib() {
+  local apk="$1" flavor="${2:-}"
+  load_env_secrets
+  local token="${TELEGRAM_BOT_TOKEN:-}"
+  local chat_id="${CONFIG_telegram_chat_id:-$DEFAULT_TELEGRAM_CHAT_ID}"
+  local topic_id="${CONFIG_telegram_topic_id:-$DEFAULT_TELEGRAM_TOPIC_ID}"
+
+  if [[ "$apk" != *.apk || ! -f "$apk" ]]; then
+    log_error "Only APK files can be sent. Nothing to send."
+    return 1
+  fi
+  if [[ -z "$token" ]]; then
+    log_error "TELEGRAM_BOT_TOKEN is not set in $SCRIPT_DIR/.env"
+    return 1
+  fi
+  if [[ -z "$chat_id" ]]; then
+    log_error "telegram_chat_id is not set in $(basename "${CONFIG_FILE:-config}")"
+    return 1
+  fi
+
+  local size_bytes
+  size_bytes=$(stat -f%z "$apk" 2>/dev/null || echo 0)
+  if (( size_bytes > 50 * 1024 * 1024 )); then
+    log_error "APK is larger than Telegram's 50 MB bot upload limit."
+    return 1
+  fi
+
+  local version_name version_code package min_sdk target_sdk size_h branch commit built_at
+  version_name=$(apk_badging_value "$apk" "versionName")
+  version_code=$(apk_badging_value "$apk" "versionCode")
+  package=$(apk_badging_value "$apk" "name")
+  min_sdk=$(apk_field_value "$apk" "minSdkVersion")
+  target_sdk=$(apk_field_value "$apk" "targetSdkVersion")
+  size_h=$(awk -v b="$size_bytes" 'BEGIN { printf "%.1f MB", b / 1048576 }')
+  branch=$(git -C "$CONFIG_project_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+  commit=$(git -C "$CONFIG_project_dir" rev-parse --short HEAD 2>/dev/null || true)
+  built_at=$(date -r "$apk" "+%Y-%m-%d %H:%M %Z")
+
+  local caption="📦 <b>${CONFIG_project_name}</b>"
+  [[ -n "$version_name" ]] && caption+=" v${version_name}"
+  [[ -n "$version_code" ]] && caption+=" (${version_code})"
+  caption+=$'\n'"🏷 Release${flavor:+ · ${flavor}}"
+  caption+=$'\n'"🕒 ${built_at}"
+  caption+=$'\n'"💾 ${size_h}"
+  [[ -n "$min_sdk" ]] && caption+=$'\n'"📱 Android SDK ${min_sdk}+${target_sdk:+ (target ${target_sdk})}"
+  [[ -n "$branch" ]] && caption+=$'\n'"🌿 <code>${branch}@${commit}</code>"
+
+  echo ""
+  echo -e "${BOLD}Upload to TIDWIB${RESET}"
+  echo -e "  ${C_MUTED}File     ${RESET} $(basename "$apk")"
+  echo -e "  ${C_MUTED}App      ${RESET} ${CONFIG_project_name}${package:+ ($package)}"
+  echo -e "  ${C_MUTED}Version  ${RESET} ${version_name:-?} (${version_code:-?})"
+  echo -e "  ${C_MUTED}Variant  ${RESET} release${flavor:+ · $flavor}"
+  [[ -n "$min_sdk" ]] && echo -e "  ${C_MUTED}SDK      ${RESET} min ${min_sdk}${target_sdk:+, target $target_sdk}"
+  echo -e "  ${C_MUTED}Size     ${RESET} ${size_h} (${size_bytes} bytes)"
+  [[ -n "$branch" ]] && echo -e "  ${C_MUTED}Git      ${RESET} ${branch}@${commit}"
+  echo ""
+
+  local resp_file
+  resp_file=$(mktemp)
+  local stats=""
+  stats=$(curl --progress-bar -X POST "https://api.telegram.org/bot${token}/sendDocument" \
+    -o "$resp_file" -w '%{http_code} %{time_total} %{speed_upload}' \
+    -F "chat_id=${chat_id}" \
+    ${topic_id:+-F "message_thread_id=${topic_id}"} \
+    -F "parse_mode=HTML" \
+    -F "caption=${caption}" \
+    -F "document=@${apk};type=application/vnd.android.package-archive") || true
+  local response
+  response=$(cat "$resp_file" 2>/dev/null || true)
+  rm -f "$resp_file"
+
+  local http_code time_total speed
+  read -r http_code time_total speed <<< "${stats:-000 0 0}"
+
+  if [[ "$response" == *'"ok":true'* ]]; then
+    local message_id link=""
+    message_id=$(echo "$response" | grep -oE '"message_id":[0-9]+' | head -1 | cut -d: -f2)
+    if [[ -n "$message_id" && "$chat_id" == -100* ]]; then
+      link="https://t.me/c/${chat_id#-100}/${message_id}${topic_id:+?thread=$topic_id}"
+    fi
+    log_success "Sent to TIDWIB in $(awk -v t="$time_total" 'BEGIN { printf "%.1fs", t }') at $(awk -v s="$speed" 'BEGIN { printf "%.1f MB/s", s / 1048576 }')."
+    [[ -n "$message_id" ]] && log_info "Message ID: ${message_id}"
+    [[ -n "$link" ]] && log_info "Link: ${C_ACCENT}${link}${RESET}"
+  else
+    log_error "Telegram upload failed (HTTP ${http_code}): $(echo "$response" | sed -E 's/bot[0-9]+:[A-Za-z0-9_-]+/bot<token>/g' | head -c 300)"
+    return 1
+  fi
+}
+
+prompt_release_output() {
+  local out_dir="$1" apk="${2:-}" flavor="${3:-}"
+  while true; do
+    # Drop keys typed while the previous action ran so they can't trigger Finder or another upload.
+    local junk=""
+    while IFS= read -rsn1 -t 0.05 junk; do :; done
+    echo ""
+    if [[ -n "$apk" ]]; then
+      echo -en "${C_MUTED}Press ${BOLD}[Enter]${RESET}${C_MUTED} to open in Finder, ${BOLD}[T]${RESET}${C_MUTED} to send to TIDWIB chat, or ${BOLD}[Esc]${RESET}${C_MUTED} to return...${RESET}"
+    else
+      echo -en "${C_MUTED}Press ${BOLD}[Enter]${RESET}${C_MUTED} to open in Finder, or ${BOLD}[Esc]${RESET}${C_MUTED} to return...${RESET}"
+    fi
+    while true; do
+      local key=""
+      if ! IFS= read -rsn1 key; then
+        echo ""
+        return 0
+      fi
+      if [[ -z "$key" ]]; then
+        echo ""
+        open "$out_dir"
+        log_info "Opened ${out_dir} in Finder."
+        break
+      elif [[ "$key" == $'\e' ]]; then
+        local rest=""
+        read -rsn2 -t 1 rest || true
+        if [[ -z "$rest" ]]; then
+          echo ""
+          return 0
+        fi
+      elif [[ -n "$apk" && ( "$key" == "t" || "$key" == "T" ) ]]; then
+        echo ""
+        send_apk_to_tidwib "$apk" "$flavor" || true
+        break
+      fi
+    done
+  done
 }
 
 prompt_reinstall_or_esc() {
