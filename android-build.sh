@@ -1260,6 +1260,64 @@ apk_field_value() {
   "$aapt_bin" dump badging "$apk" 2>/dev/null | grep -E "^${key}:'" | head -1 | cut -d"'" -f2 || true
 }
 
+html_escape() {
+  local t="$1"
+  t="${t//&/&amp;}"
+  t="${t//</&lt;}"
+  t="${t//>/&gt;}"
+  printf '%s' "$t"
+}
+
+# Commits on the current branch not in any release or pre-release tag, newest first,
+# trimmed so the whole caption stays under Telegram's 1024 character limit.
+older_commits_label() {
+  if (( $1 == 1 )); then printf '… 1 older commit'; else printf '… %d older commits' "$1"; fi
+}
+
+build_changelog_caption() {
+  local head="$1"
+  local limit=1000
+  local repo="$CONFIG_project_dir"
+  git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || return 0
+
+  # Anything already in a tagged release (stable or pre-release) is excluded.
+  local last_tag title
+  last_tag=$(git -C "$repo" tag --sort=-creatordate 2>/dev/null | head -1 || true)
+  local -a range=(HEAD)
+  if [[ -n "$last_tag" ]]; then
+    range=(HEAD --not --tags)
+    title="📝 <b>Changes since $(html_escape "$last_tag")</b>"
+  else
+    title="📝 <b>Recent changes</b>"
+  fi
+
+  local -a lines=()
+  local subject
+  while IFS= read -r subject; do
+    [[ -z "$subject" ]] && continue
+    (( ${#subject} > 90 )) && subject="${subject:0:89}…"
+    lines+=("• $(html_escape "$subject")")
+  done < <(git -C "$repo" log --no-merges --format='%s' -n 200 "${range[@]}" 2>/dev/null)
+
+  (( ${#lines[@]} == 0 )) && return 0
+
+  local body=$'\n\n'"$title"
+  local total=${#lines[@]} shown=0 i line more
+  for (( i = 0; i < total; i++ )); do
+    line="${lines[$i]}"
+    more=""
+    (( i + 1 < total )) && more=$'\n'"$(older_commits_label $(( total - i - 1 )))"
+    if (( ${#head} + ${#body} + 1 + ${#line} + ${#more} > limit )); then
+      break
+    fi
+    body+=$'\n'"$line"
+    shown=$(( shown + 1 ))
+  done
+  (( shown == 0 )) && return 0
+  (( shown < total )) && body+=$'\n'"$(older_commits_label $(( total - shown )))"
+  printf '%s' "$body"
+}
+
 send_apk_to_tidwib() {
   local apk="$1" flavor="${2:-}"
   load_env_secrets
@@ -1303,9 +1361,9 @@ send_apk_to_tidwib() {
   [[ -n "$version_code" ]] && caption+=" (${version_code})"
   caption+=$'\n'"🏷 Release${flavor:+ · ${flavor}}"
   caption+=$'\n'"🕒 ${built_at}"
-  caption+=$'\n'"💾 ${size_h}"
   [[ -n "$min_sdk" ]] && caption+=$'\n'"📱 Android SDK ${min_sdk}+${target_sdk:+ (target ${target_sdk})}"
   [[ -n "$branch" ]] && caption+=$'\n'"🌿 <code>${branch}@${commit}</code>"
+  caption+=$(build_changelog_caption "$caption")
 
   echo ""
   echo -e "${BOLD}Upload to TIDWIB${RESET}"
@@ -1500,7 +1558,7 @@ show_dashboard() {
       g|G) echo ""; action_sync || true; read -rp "Press Enter to return..." ;;
       t|T) echo ""; action_format_code || true; read -rp "Press Enter to return..." ;;
       c|C|6) echo ""; action_clean || true; read -rp "Press Enter to return..." ;;
-      b|B) echo ""; action_build_release || true; read -rp "Press Enter to return..." ;;
+      b|B) echo ""; action_build_release || true ;;
       y|Y) echo ""; action_import_icons || true; read -rp "Press Enter to return..." ;;
       w|W|8) echo ""; action_wireless_connect || true; read -rp "Press Enter to return..." ;;
       d|D) select_device "true" ;;
