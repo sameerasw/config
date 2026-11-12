@@ -1659,7 +1659,7 @@ show_dashboard() {
       g|G) echo ""; action_sync || true; read -rp "Press Enter to return..." ;;
       t|T) echo ""; action_format_code || true; read -rp "Press Enter to return..." ;;
       c|C|6) echo ""; action_clean || true; read -rp "Press Enter to return..." ;;
-      b|B) echo ""; action_build_release || true ;;
+      b|B) echo ""; action_build_release || read -rp "Press Enter to return..." ;;
       y|Y) echo ""; action_import_icons || true; read -rp "Press Enter to return..." ;;
       w|W|8) echo ""; action_wireless_connect || true; read -rp "Press Enter to return..." ;;
       d|D) select_device "true" ;;
