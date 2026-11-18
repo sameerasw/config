@@ -42,6 +42,34 @@ log_success() { echo -e "${C_SUCCESS}[SUCCESS]${RESET} $*"; }
 log_warn()    { echo -e "${C_WARN}[WARN]${RESET} $*"; }
 log_error()   { echo -e "${C_ERROR}[ERROR]${RESET} $*" >&2; }
 
+# Prints why a keystore file can't be used. Returns 1 when missing, 2 when it exists but can't be read.
+keystore_access_error() {
+  local f="$1" err=""
+  if ! err=$(stat "$f" 2>&1 >/dev/null); then
+    if [[ "$err" == *"Operation not permitted"* || "$err" == *"Permission denied"* ]]; then
+      echo "can't be accessed (macOS may be blocking this terminal from that folder: allow it under System Settings > Privacy & Security > Files and Folders, or Full Disk Access)"
+      return 2
+    fi
+    echo "was not found"
+    return 1
+  fi
+  if [[ ! -r "$f" ]] || ! head -c 1 "$f" >/dev/null 2>&1; then
+    echo "can't be read (check the file permissions, or macOS blocking this terminal from that folder)"
+    return 2
+  fi
+  return 0
+}
+
+# Tells a wrong password apart from every other keytool/apksigner/jarsigner failure.
+classify_keystore_error() {
+  case "$1" in
+    *"password was incorrect"*|*"ampered with"*|*"Cannot recover key"*|*"Wrong password"*|*"wrong password"*) echo password ;;
+    *"Permission denied"*|*"Operation not permitted"*|*"No such file"*|*"AccessDenied"*|*"NoSuchFile"*|*"FileNotFound"*) echo access ;;
+    *"Unable to locate a Java Runtime"*|*"JAVA_HOME"*) echo java ;;
+    *) echo other ;;
+  esac
+}
+
 # --- Config Parsing ---
 CONFIG_FILE=""
 SUBCOMMAND=""
@@ -687,6 +715,18 @@ action_build_release_flavor() {
   local alias_name="${CONFIG_keystore_alias:-}"
 
   # If keystore is configured, ensure we have a valid password BEFORE starting Gradle build
+  if [[ -n "$CONFIG_keystore_file" ]]; then
+    local ks_reason="" ks_rc=0
+    ks_reason=$(keystore_access_error "$CONFIG_keystore_file") || ks_rc=$?
+    if [[ $ks_rc -eq 2 ]]; then
+      log_error "Keystore $CONFIG_keystore_file $ks_reason."
+      return 1
+    elif [[ $ks_rc -eq 1 ]]; then
+      log_warn "Keystore $CONFIG_keystore_file $ks_reason. The release will be left unsigned."
+      CONFIG_keystore_file=""
+    fi
+  fi
+
   if [[ -n "$CONFIG_keystore_file" && -f "$CONFIG_keystore_file" ]]; then
     local keytool_bin=$(which keytool 2>/dev/null || echo "/usr/bin/keytool")
     while true; do
@@ -703,16 +743,36 @@ action_build_release_flavor() {
 
       # Validate password and find alias without triggering set -e
       if [[ -x "$keytool_bin" ]]; then
-        local keytool_out=""
-        if keytool_out=$("$keytool_bin" -list -keystore "$CONFIG_keystore_file" -storepass "$cached_pass" 2>/dev/null); then
+        local keytool_out="" keytool_rc=0
+        keytool_out=$("$keytool_bin" -list -keystore "$CONFIG_keystore_file" -storepass "$cached_pass" 2>&1) || keytool_rc=$?
+        if [[ $keytool_rc -eq 0 ]]; then
           if [[ -z "$alias_name" ]]; then
             alias_name=$(echo "$keytool_out" | grep "PrivateKeyEntry" | head -1 | cut -d',' -f1 | tr -d ' ' || echo "upload")
             [[ -z "$alias_name" ]] && alias_name="upload"
           fi
           break
         else
-          log_error "Incorrect keystore password for $(basename "$CONFIG_keystore_file"). Try again."
-          cached_pass=""
+          case "$(classify_keystore_error "$keytool_out")" in
+            password)
+              log_error "Incorrect keystore password for $(basename "$CONFIG_keystore_file"). Try again."
+              cached_pass=""
+              ;;
+            access)
+              log_error "Could not open $(basename "$CONFIG_keystore_file"), this is not a password problem:"
+              echo "$keytool_out" | head -3 >&2
+              return 1
+              ;;
+            java)
+              log_error "keytool could not find a Java runtime. Install a JDK or set JAVA_HOME."
+              echo "$keytool_out" | head -3 >&2
+              return 1
+              ;;
+            *)
+              log_error "keytool failed:"
+              echo "$keytool_out" | head -5 >&2
+              return 1
+              ;;
+          esac
         fi
       else
         break
@@ -741,11 +801,16 @@ action_build_release_flavor() {
           log_info "Signing release bundle with ${C_ACCENT}$(basename "$CONFIG_keystore_file")${RESET}..."
           local jarsigner_bin=$(which jarsigner 2>/dev/null || echo "/usr/bin/jarsigner")
           if [[ -x "$jarsigner_bin" ]]; then
-            "$jarsigner_bin" -keystore "$CONFIG_keystore_file" \
+            local jar_out=""
+            if jar_out=$("$jarsigner_bin" -keystore "$CONFIG_keystore_file" \
               -storepass "$cached_pass" \
               ${CONFIG_key_pass:+-keypass "$CONFIG_key_pass"} \
-              "$out_aab" "$alias_name" >/dev/null 2>&1 || true
-            log_success "Release Bundle signed."
+              "$out_aab" "$alias_name" 2>&1); then
+              log_success "Release Bundle signed."
+            else
+              log_error "Bundle signing failed ($(classify_keystore_error "$jar_out")):"
+              echo "$jar_out" | head -5 >&2
+            fi
           fi
         fi
         log_info "Release Bundle: ${C_ACCENT}$out_aab${RESET}"
@@ -791,10 +856,16 @@ action_build_release_flavor() {
               sign_success=1
               break
             else
-              log_error "APK signing failed."
-              echo -en "${C_PRIMARY}Enter Keystore / Key Password for $(basename "$CONFIG_keystore_file"): ${RESET}"
-              read -rs cached_pass
-              echo ""
+              log_error "APK signing failed:"
+              echo "$apksign_err" | head -5 >&2
+              if [[ "$(classify_keystore_error "$apksign_err")" == "password" ]]; then
+                echo -en "${C_PRIMARY}Enter Keystore / Key Password for $(basename "$CONFIG_keystore_file"): ${RESET}"
+                read -rs cached_pass
+                echo ""
+              else
+                log_warn "This is not a password problem, leaving the APK unsigned."
+                break
+              fi
             fi
           done
 
