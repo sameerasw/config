@@ -42,6 +42,93 @@ log_success() { echo -e "${C_SUCCESS}[SUCCESS]${RESET} $*"; }
 log_warn()    { echo -e "${C_WARN}[WARN]${RESET} $*"; }
 log_error()   { echo -e "${C_ERROR}[ERROR]${RESET} $*" >&2; }
 
+# --- Shared TUI helpers ---
+print_divider() { echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"; }
+
+print_header() {
+  echo ""
+  echo -e "${BOLD}${C_PRIMARY}$1${RESET} ${2:-}"
+  print_divider
+}
+
+print_menu_item() {
+  printf "  ${BOLD}%-5s${RESET} %-30s ${C_MUTED}%s${RESET}\n" "[$1]" "$2" "${3:-}"
+}
+
+print_back_hint() { echo -e "${C_MUTED}Press ${BOLD}[Esc]${RESET}${C_MUTED} to go back${RESET}"; }
+
+trim() {
+  local v="$1"
+  v="${v#"${v%%[![:space:]]*}"}"
+  v="${v%"${v##*[![:space:]]}"}"
+  printf '%s' "$v"
+}
+
+to_lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+
+# Reads one key into KEY_KIND (enter|esc|back|char|ignored) and KEY.
+read_key() {
+  KEY=""
+  KEY_KIND="char"
+  IFS= read -rsn1 KEY || { KEY_KIND="esc"; return 0; }
+  case "$KEY" in
+    "") KEY_KIND="enter" ;;
+    $'\e')
+      local rest=""
+      read -rsn2 -t 1 rest || true
+      if [[ -z "$rest" ]]; then KEY_KIND="esc"; else KEY_KIND="ignored"; fi
+      ;;
+    $'\x7f'|$'\b') KEY_KIND="back" ;;
+  esac
+}
+
+# Reads a line into INPUT_LINE; returns 1 when cancelled with Esc.
+read_line_esc() {
+  INPUT_LINE=""
+  echo -en "$1"
+  while true; do
+    read_key
+    case "$KEY_KIND" in
+      enter) echo ""; return 0 ;;
+      esc) echo ""; return 1 ;;
+      ignored) ;;
+      back)
+        if [[ -n "$INPUT_LINE" ]]; then
+          INPUT_LINE="${INPUT_LINE%?}"
+          echo -en "\b \b"
+        fi
+        ;;
+      *) INPUT_LINE+="$KEY"; printf '%s' "$KEY" ;;
+    esac
+  done
+}
+
+# Prompts for a non-empty value into ASK_RESULT; returns 1 when empty or cancelled.
+ask_value() {
+  ASK_RESULT=""
+  read_line_esc "$1 (Esc to cancel): " || return 1
+  ASK_RESULT="$(trim "$INPUT_LINE")"
+  [[ -n "$ASK_RESULT" ]]
+}
+
+pause_return() { read -rp "Press Enter to return..." || true; }
+
+run_and_pause() {
+  echo ""
+  "$@" || true
+  pause_return
+}
+
+require_gradlew() {
+  cd "$CONFIG_project_dir" || return 1
+  GRADLEW="./gradlew"
+  if [[ ! -f "$GRADLEW" ]]; then
+    log_error "No './gradlew' wrapper found in $CONFIG_project_dir!"
+    return 1
+  fi
+  chmod +x "$GRADLEW"
+}
+
 # Prints why a keystore file can't be used. Returns 1 when missing, 2 when it exists but can't be read.
 keystore_access_error() {
   local f="$1" err=""
@@ -142,7 +229,7 @@ select_project_interactive() {
 
   clear
   echo -e "${BOLD}${C_PRIMARY}android-build${RESET}"
-  echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"
+  print_divider
   echo -e "Available Projects:"
   local i=1
   for cfg in "${config_files[@]}"; do
@@ -161,7 +248,7 @@ select_project_interactive() {
     printf "  ${BOLD}[%d]${RESET} %-24s%b ${C_MUTED}(%s)${RESET}\n" "$i" "$p_name" "$type_badge" "$p_pkg"
     ((i++))
   done
-  echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"
+  print_divider
   while true; do
     read -rp "Select project [1-$count] (default 1): " choice
     choice="${choice:-1}"
@@ -528,13 +615,8 @@ action_build() {
   log_info "Starting Gradle build: ${BOLD}$CONFIG_gradle_task${RESET} in ${C_MUTED}$CONFIG_project_dir${RESET}..."
   cd "$CONFIG_project_dir"
 
-  local gradlew_bin="./gradlew"
-  if [[ ! -f "$gradlew_bin" ]]; then
-    log_error "No './gradlew' wrapper found in $CONFIG_project_dir!"
-    return 1
-  fi
-
-  chmod +x "$gradlew_bin"
+  require_gradlew || return 1
+  local gradlew_bin="$GRADLEW"
   local start_time=$(date +%s)
 
   if run_gradle_with_stats "$gradlew_bin" "$CONFIG_gradle_task" --daemon; then
@@ -621,12 +703,8 @@ action_restart() {
 action_clean() {
   log_info "Running Gradle clean & stopping daemons in ${C_MUTED}$CONFIG_project_dir${RESET}..."
   cd "$CONFIG_project_dir"
-  local gradlew_bin="./gradlew"
-  if [[ ! -f "$gradlew_bin" ]]; then
-    log_error "No './gradlew' wrapper found in $CONFIG_project_dir!"
-    return 1
-  fi
-  chmod +x "$gradlew_bin"
+  require_gradlew || return 1
+  local gradlew_bin="$GRADLEW"
 
   "$gradlew_bin" clean || true
   "$gradlew_bin" --stop || true
@@ -687,12 +765,8 @@ action_build_release_flavor() {
     log_info "Release flavor: ${BOLD}${flavor}${RESET}"
   fi
   cd "$CONFIG_project_dir"
-  local gradlew_bin="./gradlew"
-  if [[ ! -f "$gradlew_bin" ]]; then
-    log_error "No './gradlew' wrapper found in $CONFIG_project_dir!"
-    return 1
-  fi
-  chmod +x "$gradlew_bin"
+  require_gradlew || return 1
+  local gradlew_bin="$GRADLEW"
 
   local r_type="${CONFIG_release_type:-apk}"
   if [[ -n "$flavor" ]]; then
@@ -1033,7 +1107,7 @@ action_format_code() {
   echo -e "  ${BOLD}[1]${RESET} Modified files only (Git diff - fast)"
   echo -e "  ${BOLD}[2]${RESET} Entire project"
   echo -e "  ${BOLD}[3]${RESET} Specific directory or file"
-  echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"
+  print_divider
   read -rp "Select scope [1-3] (default 1): " f_choice
   f_choice="${f_choice:-1}"
 
@@ -1171,12 +1245,8 @@ action_run_all() {
 action_sync() {
   log_info "Running Gradle sync & dependency check in ${C_MUTED}$CONFIG_project_dir${RESET}..."
   cd "$CONFIG_project_dir"
-  local gradlew_bin="./gradlew"
-  if [[ ! -f "$gradlew_bin" ]]; then
-    log_error "No './gradlew' wrapper found in $CONFIG_project_dir!"
-    return 1
-  fi
-  chmod +x "$gradlew_bin"
+  require_gradlew || return 1
+  local gradlew_bin="$GRADLEW"
   if "$gradlew_bin" help --daemon >/dev/null && "$gradlew_bin" tasks --daemon >/dev/null; then
     log_success "Gradle sync & daemon check complete!"
     return 0
@@ -1651,65 +1721,55 @@ prompt_reinstall_or_esc() {
   echo ""
   echo -en "${C_MUTED}Press ${BOLD}[Enter]${RESET}${C_MUTED} to re-install, or ${BOLD}[Esc]${RESET}${C_MUTED} to return...${RESET}"
   while true; do
-    local key=""
-    IFS= read -rsn1 key || true
-    if [[ -z "$key" ]]; then
-      echo ""
-      return 0
-    elif [[ "$key" == $'\e' ]]; then
-      local rest=""
-      read -rsn2 -t 1 rest || true
-      if [[ -z "$rest" ]]; then
-        echo ""
-        return 1
-      fi
-    fi
+    read_key || true
+    case "$KEY_KIND" in
+      enter) echo ""; return 0 ;;
+      esc) echo ""; return 1 ;;
+    esac
   done
 }
 
-git_trim() {
-  local v="$1"
-  v="${v#"${v%%[![:space:]]*}"}"
-  v="${v%"${v##*[![:space:]]}"}"
-  printf '%s' "$v"
-}
-
-git_read_line() {
-  GIT_LINE=""
-  local key rest
-  echo -en "$1"
+# --- Submenu engine ---
+# A submenu <name> provides <name>_draw and <name>_dispatch <sub> <arg>; it may set SUBMENU_QUIET=1 for interactive commands.
+# Input is "<sub> [arg]" (an optional leading <prefix> letter is accepted); "once" runs a single command and returns.
+submenu_run() {
+  local name="$1" prefix="$2" input="${3:-}" once="${4:-}" first=1
+  local prefix_re="^[${prefix}$(printf '%s' "$prefix" | tr '[:lower:]' '[:upper:]')]([a-zA-Z]|[[:space:]])"
   while true; do
-    IFS= read -rsn1 key || { echo ""; return 1; }
-    if [[ -z "$key" ]]; then
-      echo ""
-      return 0
-    elif [[ "$key" == $'\e' ]]; then
-      rest=""
-      read -rsn2 -t 1 rest || true
-      if [[ -z "$rest" ]]; then
-        echo ""
-        return 1
-      fi
-    elif [[ "$key" == $'\x7f' || "$key" == $'\b' ]]; then
-      if [[ -n "$GIT_LINE" ]]; then
-        GIT_LINE="${GIT_LINE%?}"
-        echo -en "\b \b"
-      fi
-    else
-      GIT_LINE+="$key"
-      printf '%s' "$key"
+    if [[ -z "$input" ]]; then
+      (( first )) && clear
+      first=0
+      "${name}_draw"
+      print_back_hint
+      read_line_esc "${name}> " || return 0
+      input="$INPUT_LINE"
     fi
+    input="$(trim "$input")"
+    if [[ -z "$input" ]]; then
+      continue
+    fi
+    [[ "$input" =~ $prefix_re ]] && input="$(trim "${input:1}")"
+
+    local sub="${input%%[[:space:]]*}" arg=""
+    [[ "$input" == *[[:space:]]* ]] && arg="$(trim "${input#"$sub"}")"
+    sub="$(to_lower "$sub")"
+
+    SUBMENU_QUIET=0
+    echo ""
+    if "${name}_dispatch" "$sub" "$arg"; then
+      (( SUBMENU_QUIET )) || log_success "Done."
+    else
+      log_warn "${name} command did not complete."
+    fi
+    if [[ -n "$once" ]]; then
+      (( SUBMENU_QUIET )) || pause_return
+      return 0
+    fi
+    input=""
   done
 }
 
-git_ask() {
-  local label="$1" val=""
-  git_read_line "$label (Esc to cancel): " || return 1
-  val="$(git_trim "$GIT_LINE")"
-  [[ -z "$val" ]] && return 1
-  printf '%s' "$val"
-}
-
+# --- Git submenu ---
 git_in_project() {
   cd "$CONFIG_project_dir" || return 1
   if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -1719,22 +1779,22 @@ git_in_project() {
 }
 
 git_do_develop() {
-  git_in_project || return 1
   git checkout develop && git pull
 }
 
 git_do_new_branch() {
-  git_in_project || return 1
-  local name="$1"
-  [[ -z "$name" ]] && { name="$(git_ask "New branch name")" || return 1; }
+  local name="${1:-}"
+  if [[ -z "$name" ]]; then
+    ask_value "New branch name" || return 1
+    name="$ASK_RESULT"
+  fi
   git checkout -b "$name"
 }
 
 git_do_switch() {
-  git_in_project || return 1
-  local name="$1"
+  local name="${1:-}"
   if [[ -z "$name" ]]; then
-    local branches=()
+    local branches=() b
     while IFS= read -r b; do
       [[ -n "$b" ]] && branches+=("$b")
     done < <(git for-each-ref --sort=-committerdate --count=10 --format='%(refname:short)' refs/heads)
@@ -1742,19 +1802,18 @@ git_do_switch() {
       log_warn "No local branches found."
       return 1
     fi
-    local current
+    local current i
     current="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-    local i=1
-    for b in "${branches[@]}"; do
+    for i in "${!branches[@]}"; do
+      b="${branches[$i]}"
       if [[ "$b" == "$current" ]]; then
-        echo -e "  ${BOLD}$i)${RESET} ${C_SUCCESS}$b${RESET} ${C_MUTED}(current)${RESET}"
+        echo -e "  ${BOLD}$((i + 1)))${RESET} ${C_SUCCESS}$b${RESET} ${C_MUTED}(current)${RESET}"
       else
-        echo -e "  ${BOLD}$i)${RESET} $b"
+        echo -e "  ${BOLD}$((i + 1)))${RESET} $b"
       fi
-      i=$((i + 1))
     done
-    local pick
-    pick="$(git_ask "Select branch [1-${#branches[@]}] or type a name")" || return 1
+    ask_value "Select branch [1-${#branches[@]}] or type a name" || return 1
+    local pick="$ASK_RESULT"
     if [[ "$pick" =~ ^[0-9]+$ ]] && (( pick >= 1 && pick <= ${#branches[@]} )); then
       name="${branches[$((pick - 1))]}"
     else
@@ -1765,13 +1824,15 @@ git_do_switch() {
 }
 
 git_do_pr() {
-  git_in_project || return 1
   if ! command -v gh >/dev/null 2>&1; then
     log_error "GitHub CLI (gh) is not installed."
     return 1
   fi
-  local id="$1"
-  [[ -z "$id" ]] && { id="$(git_ask "PR number")" || return 1; }
+  local id="${1:-}"
+  if [[ -z "$id" ]]; then
+    ask_value "PR number" || return 1
+    id="$ASK_RESULT"
+  fi
   id="${id#\#}"
   if [[ ! "$id" =~ ^[0-9]+$ ]]; then
     log_error "Invalid PR number '$id'."
@@ -1781,9 +1842,11 @@ git_do_pr() {
 }
 
 git_do_commit() {
-  git_in_project || return 1
-  local msg="$1"
-  [[ -z "$msg" ]] && { msg="$(git_ask "Commit message")" || return 1; }
+  local msg="${1:-}"
+  if [[ -z "$msg" ]]; then
+    ask_value "Commit message" || return 1
+    msg="$ASK_RESULT"
+  fi
   if [[ ${#msg} -ge 2 && ( ( "${msg:0:1}" == '"' && "${msg: -1}" == '"' ) || ( "${msg:0:1}" == "'" && "${msg: -1}" == "'" ) ) ]]; then
     msg="${msg:1:${#msg}-2}"
   fi
@@ -1791,71 +1854,34 @@ git_do_commit() {
 }
 
 git_do_add() {
-  git_in_project || return 1
   git add . && log_success "Staged all changes."
 }
 
+git_draw() {
+  get_project_details
+  print_header "git" "${C_SUCCESS}${PROJECT_GIT_BRANCH}${RESET} ${PROJECT_GIT_INFO}"
+  print_menu_item "D" "Checkout & pull develop" "gd"
+  print_menu_item "B" "New branch" "gb <name>"
+  print_menu_item "S" "Switch branch" "gs <name>"
+  print_menu_item "PR" "Checkout PR" "gpr <id|#id>"
+  print_menu_item "C" "Commit" "gc <message>"
+  print_menu_item "A" "Add all" "ga"
+}
+
 git_dispatch() {
-  local sub="$1" arg="$2"
-  case "$sub" in
+  git_in_project || return 1
+  case "$1" in
     d) git_do_develop ;;
-    b) git_do_new_branch "$arg" ;;
-    s) git_do_switch "$arg" ;;
-    pr) git_do_pr "$arg" ;;
-    c) git_do_commit "$arg" ;;
+    b) git_do_new_branch "$2" ;;
+    s) git_do_switch "$2" ;;
+    pr) git_do_pr "$2" ;;
+    c) git_do_commit "$2" ;;
     a) git_do_add ;;
-    *) log_warn "Unknown git command '$sub'."; return 1 ;;
+    *) log_warn "Unknown git command '$1'."; return 1 ;;
   esac
 }
 
-git_menu() {
-  local input="${1:-}" once="${2:-}"
-  local first=1
-  while true; do
-    if [[ -z "$input" ]]; then
-      (( first )) && clear
-      first=0
-      echo ""
-      get_project_details
-      echo -e "${BOLD}${C_PRIMARY}git${RESET} ${C_SUCCESS}${PROJECT_GIT_BRANCH}${RESET} ${PROJECT_GIT_INFO}"
-      echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"
-      echo -e "  ${BOLD}[D]${RESET} Checkout & pull develop"
-      echo -e "  ${BOLD}[B]${RESET} New branch      ${C_MUTED}gb <name>${RESET}"
-      echo -e "  ${BOLD}[S]${RESET} Switch branch   ${C_MUTED}gs <name>${RESET}"
-      echo -e "  ${BOLD}[PR]${RESET} Checkout PR    ${C_MUTED}gpr <id|#id>${RESET}"
-      echo -e "  ${BOLD}[C]${RESET} Commit          ${C_MUTED}gc <message>${RESET}"
-      echo -e "  ${BOLD}[A]${RESET} Add all         ${C_MUTED}(git add .)${RESET}"
-      echo -e "${C_MUTED}Press ${BOLD}[Esc]${RESET}${C_MUTED} to go back${RESET}"
-      git_read_line "git> " || return 0
-      input="$GIT_LINE"
-    fi
-    input="$(git_trim "$input")"
-    if [[ -z "$input" ]]; then
-      continue
-    fi
-    if [[ "$input" =~ ^[gG]([a-zA-Z]|[[:space:]]) ]]; then
-      input="$(git_trim "${input:1}")"
-    fi
-    local sub="${input%%[[:space:]]*}"
-    local arg=""
-    if [[ "$input" == *[[:space:]]* ]]; then
-      arg="$(git_trim "${input#"$sub"}")"
-    fi
-    sub="$(printf '%s' "$sub" | tr '[:upper:]' '[:lower:]')"
-    echo ""
-    if git_dispatch "$sub" "$arg"; then
-      log_success "Done."
-    else
-      log_warn "Git command did not complete."
-    fi
-    if [[ -n "$once" ]]; then
-      read -rp "Press Enter to return..."
-      return 0
-    fi
-    input=""
-  done
-}
-
+# --- Gradle submenu ---
 gradle_props() {
   python3 - "$@" <<'PYEOF'
 import re, sys
@@ -1900,17 +1926,8 @@ elif mode == 'set':
 PYEOF
 }
 
-gradle_menu_draw() {
-  echo ""
-  echo -e "${BOLD}${C_PRIMARY}gradle${RESET}"
-  echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"
-  echo -e "  ${BOLD}[S]${RESET} Sync            ${C_MUTED}cs${RESET}"
-  echo -e "  ${BOLD}[C]${RESET} Clean build     ${C_MUTED}cc${RESET}"
-  echo -e "  ${BOLD}[P]${RESET} Properties      ${C_MUTED}cp${RESET}"
-  echo -e "${C_MUTED}Press ${BOLD}[Esc]${RESET}${C_MUTED} to go back${RESET}"
-}
-
 gradle_props_menu() {
+  SUBMENU_QUIET=1
   local gradle_file status=""
   gradle_file=$(find_app_gradle_file)
   if [[ -z "$gradle_file" ]]; then
@@ -1929,54 +1946,46 @@ gradle_props_menu() {
       return 1
     fi
     clear
-    echo -e "${BOLD}${C_PRIMARY}gradle properties${RESET} ${C_MUTED}${gradle_file#$CONFIG_project_dir/}${RESET}"
-    echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"
+    print_header "gradle properties" "${C_MUTED}${gradle_file#$CONFIG_project_dir/}${RESET}"
     local i
     for i in "${!keys[@]}"; do
-      printf "  ${BOLD}[%d]${RESET} %-28s ${C_ACCENT}%s${RESET}\n" "$((i + 1))" "${keys[$i]}" "${vals[$i]}"
+      print_menu_item "$((i + 1))" "${keys[$i]}" "${vals[$i]}"
     done
-    echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"
-    echo -e "${C_MUTED}Pick a number, or '<n> <value>' to set directly. '+' after a number bumps it (e.g. 2+).${RESET}"
-    echo -e "${C_MUTED}Press ${BOLD}[Esc]${RESET}${C_MUTED} to go back${RESET}"
+    print_divider
+    echo -e "${C_MUTED}Pick a number, '<n> <value>' to set directly, or '<n>+' to bump a number.${RESET}"
+    print_back_hint
     [[ -n "$status" ]] && echo -e "$status"
     status=""
-    git_read_line "props> " || return 0
-    local input num rest new
-    input="$(git_trim "$GIT_LINE")"
+    read_line_esc "props> " || return 0
+
+    local input num rest new idx key cur
+    input="$(trim "$INPUT_LINE")"
     [[ -z "$input" ]] && continue
     num="${input%%[^0-9]*}"
-    rest="$(git_trim "${input#"$num"}")"
+    rest="$(trim "${input#"$num"}")"
     if [[ -z "$num" ]] || (( num < 1 || num > ${#keys[@]} )); then
       status="${C_WARN}[WARN]${RESET} Invalid selection."
       continue
     fi
-    local idx=$((num - 1)) key="${keys[$((num - 1))]}" cur="${vals[$((num - 1))]}"
-    if [[ "$rest" == "+" ]]; then
+    idx=$((num - 1)); key="${keys[$idx]}"; cur="${vals[$idx]}"
+    if [[ -z "$rest" ]]; then
+      echo ""
+      echo -e "  ${BOLD}$key${RESET} = ${C_ACCENT}$cur${RESET}"
+      if [[ "$cur" =~ ^[0-9]+$ ]]; then
+        ask_value "New value, or + to bump" || continue
+      else
+        ask_value "New value" || continue
+      fi
+      new="$ASK_RESULT"
+    else
+      new="$rest"
+    fi
+    if [[ "$new" == "+" ]]; then
       if [[ "$cur" =~ ^[0-9]+$ ]]; then
         new=$((cur + 1))
       else
         status="${C_WARN}[WARN]${RESET} $key is not numeric."
         continue
-      fi
-    elif [[ -n "$rest" ]]; then
-      new="$rest"
-    else
-      echo ""
-      echo -e "  ${BOLD}$key${RESET} = ${C_ACCENT}$cur${RESET}"
-      if [[ "$cur" =~ ^[0-9]+$ ]]; then
-        git_read_line "New value (Enter '+' to bump, Esc to cancel): " || continue
-      else
-        git_read_line "New value (Esc to cancel): " || continue
-      fi
-      new="$(git_trim "$GIT_LINE")"
-      [[ -z "$new" ]] && continue
-      if [[ "$new" == "+" ]]; then
-        if [[ "$cur" =~ ^[0-9]+$ ]]; then
-          new=$((cur + 1))
-        else
-          status="${C_WARN}[WARN]${RESET} $key is not numeric."
-          continue
-        fi
       fi
     fi
     if [[ "$cur" =~ ^[0-9]+$ && ! "$new" =~ ^[0-9]+$ ]]; then
@@ -1988,6 +1997,14 @@ gradle_props_menu() {
   done
 }
 
+gradle_draw() {
+  get_project_details
+  print_header "gradle" "${C_MUTED}${PROJECT_VERSION}${RESET}"
+  print_menu_item "S" "Sync" "cs"
+  print_menu_item "C" "Clean build" "cc"
+  print_menu_item "P" "Properties" "cp"
+}
+
 gradle_dispatch() {
   case "$1" in
     s) action_sync ;;
@@ -1995,37 +2012,6 @@ gradle_dispatch() {
     p) gradle_props_menu ;;
     *) log_warn "Unknown gradle command '$1'."; return 1 ;;
   esac
-}
-
-gradle_menu() {
-  local input="${1:-}" once="${2:-}"
-  while true; do
-    if [[ -z "$input" ]]; then
-      gradle_menu_draw
-      git_read_line "gradle> " || return 0
-      input="$GIT_LINE"
-    fi
-    input="$(git_trim "$input")"
-    if [[ -z "$input" ]]; then
-      continue
-    fi
-    if [[ "$input" =~ ^[cC]([a-zA-Z]|[[:space:]]) ]]; then
-      input="$(git_trim "${input:1}")"
-    fi
-    local sub
-    sub="$(printf '%s' "$input" | tr '[:upper:]' '[:lower:]')"
-    echo ""
-    if gradle_dispatch "$sub"; then
-      [[ "$sub" != p ]] && log_success "Done."
-    else
-      log_warn "Gradle command did not complete."
-    fi
-    if [[ -n "$once" ]]; then
-      [[ "$sub" != p ]] && read -rp "Press Enter to return..."
-      return 0
-    fi
-    input=""
-  done
 }
 
 # --- Interactive TUI Dashboard ---
@@ -2040,7 +2026,7 @@ show_dashboard() {
     get_project_details
     clear
     echo -e "${BOLD}${C_PRIMARY}android-build${RESET}"
-    echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"
+    print_divider
     echo -e "  ${BOLD}Project:${RESET}   ${C_ACCENT}${CONFIG_project_name}${RESET}${C_ACCENT}${PROJECT_TARGET_TYPE}${RESET} ${C_MUTED}${PROJECT_VERSION}${RESET}"
     echo -e "  ${BOLD}Package:${RESET}   ${C_PRIMARY}${CONFIG_package_name}${RESET} ${C_MUTED}${PROJECT_SDK}${RESET}"
     if [[ -n "$PROJECT_GIT_BRANCH" ]]; then
@@ -2048,7 +2034,7 @@ show_dashboard() {
     fi
     echo -e "  ${BOLD}Device:${RESET}    ${C_SUCCESS}${SELECTED_DEVICE}${RESET}"
     echo -e "  ${BOLD}Task:${RESET}      ${C_WARN}${CONFIG_gradle_task}${RESET} [${CONFIG_build_variant}]"
-    echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"
+    print_divider
     
     # Section 1: Build & Run
     echo -e "  ${BOLD}[R]${RESET} Run & Debug"
@@ -2082,7 +2068,7 @@ show_dashboard() {
     # Section 5: Editor & Quit
     echo -e "  ${BOLD}[E]${RESET} Open in editor"
     echo -e "  ${BOLD}[Q]${RESET} Quit"
-    echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"
+    print_divider
     
     read -e -rp "> " opt
     if [[ -n "$opt" ]]; then
@@ -2091,7 +2077,7 @@ show_dashboard() {
     fi
 
     case "$opt" in
-      r|R|1) echo ""; action_run_all || true; read -rp "Press Enter to return..." ;;
+      r|R|1) run_and_pause action_run_all ;;
       i|I|2)
         while true; do
           echo ""
@@ -2112,19 +2098,19 @@ show_dashboard() {
           log_warn "Optimized dev build is not configured in this project." ; sleep 1
         fi
         ;;
-      l|L|3) echo ""; action_logs || true; read -rp "Press Enter to return..." ;;
+      l|L|3) run_and_pause action_logs ;;
       f|F|5) echo ""; action_stop || true; sleep 1 ;;
       s|S|4) echo ""; action_launch || true; sleep 1 ;;
       m|M|7) echo ""; action_mirror || true; sleep 1 ;;
-      g|G) git_menu "" ;;
-      g[[:space:]]*|G[[:space:]]*|g[a-zA-Z]*|G[a-zA-Z]*) git_menu "${opt:1}" once ;;
-      t|T) echo ""; action_format_code || true; read -rp "Press Enter to return..." ;;
-      c|C) gradle_menu "" ;;
-      c[[:space:]]*|C[[:space:]]*|c[a-zA-Z]*|C[a-zA-Z]*) gradle_menu "${opt:1}" once ;;
-      6) echo ""; action_clean || true; read -rp "Press Enter to return..." ;;
+      g|G) submenu_run git g ;;
+      g[[:space:]]*|G[[:space:]]*|g[a-zA-Z]*|G[a-zA-Z]*) submenu_run git g "${opt:1}" once ;;
+      t|T) run_and_pause action_format_code ;;
+      c|C) submenu_run gradle c ;;
+      c[[:space:]]*|C[[:space:]]*|c[a-zA-Z]*|C[a-zA-Z]*) submenu_run gradle c "${opt:1}" once ;;
+      6) run_and_pause action_clean ;;
       b|B) echo ""; action_build_release || read -rp "Press Enter to return..." ;;
-      y|Y) echo ""; action_import_icons || true; read -rp "Press Enter to return..." ;;
-      w|W|8) echo ""; action_wireless_connect || true; read -rp "Press Enter to return..." ;;
+      y|Y) run_and_pause action_import_icons ;;
+      w|W|8) run_and_pause action_wireless_connect ;;
       d|D) select_device "true" ;;
       p|P)
         select_project_interactive
