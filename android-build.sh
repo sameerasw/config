@@ -2021,6 +2021,22 @@ gradle_dispatch() {
   esac
 }
 
+# --- App submenu ---
+app_draw() {
+  print_header "app" "${C_PRIMARY}${CONFIG_package_name}${RESET}"
+  print_menu_item "S" "Start" "as"
+  print_menu_item "F" "Force stop" "af"
+}
+
+app_dispatch() {
+  SUBMENU_QUIET=1
+  case "$1" in
+    s) action_launch ;;
+    f) action_stop ;;
+    *) log_warn "Unknown app command '$1'."; return 1 ;;
+  esac
+}
+
 # --- Devices submenu ---
 is_wireless_serial() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+$ || "$1" == *_adb-tls-connect* ]]; }
 
@@ -2192,11 +2208,6 @@ show_dashboard() {
     echo -e "  ${BOLD}[L]${RESET} Logcat"
     echo ""
 
-    # Section 2: App Control
-    echo -e "  ${BOLD}[F]${RESET} Force stop"
-    echo -e "  ${BOLD}[S]${RESET} Start"
-    echo ""
-
     # Section 3: Tools & Builds
     echo -e "  ${BOLD}[C]${RESET} Configure Gradle ${C_MUTED}›${RESET}"
     echo -e "  ${BOLD}[T]${RESET} Format code"
@@ -2205,6 +2216,7 @@ show_dashboard() {
     echo ""
 
     # Section 4: Device & Project
+    echo -e "  ${BOLD}[A]${RESET} App ${C_MUTED}›${RESET}"
     echo -e "  ${BOLD}[D]${RESET} Devices ${C_MUTED}›${RESET}"
     echo -e "  ${BOLD}[G]${RESET} Git ${C_MUTED}›${RESET}"
     echo -e "  ${BOLD}[P]${RESET} Switch Project"
@@ -2250,8 +2262,8 @@ show_dashboard() {
         fi
         ;;
       l|L|3) run_and_pause action_logs ;;
-      f|F|5) echo ""; action_stop || true; keep_screen=1 ;;
-      s|S|4) echo ""; action_launch || true; keep_screen=1 ;;
+      a|A) submenu_run app a ;;
+      a[[:space:]]*|A[[:space:]]*|a[a-zA-Z]*|A[a-zA-Z]*) submenu_run app a "${opt:1}" once; keep_screen=1 ;;
       g|G) submenu_run git g ;;
       g[[:space:]]*|G[[:space:]]*|g[a-zA-Z]*|G[a-zA-Z]*) submenu_run git g "${opt:1}" once ;;
       t|T) run_and_pause action_format_code ;;
