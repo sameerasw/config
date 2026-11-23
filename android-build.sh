@@ -68,6 +68,15 @@ trim() {
 
 to_lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
+# Reads the rest of an escape sequence into REST; empty after ~0.1s means a bare Esc (bash 3.2 has no fractional read timeout).
+read_esc_tail() {
+  local saved
+  saved="$(stty -g 2>/dev/null)" || { REST=""; return 0; }
+  stty -icanon min 0 time 1 2>/dev/null
+  REST="$(dd bs=1 count=2 2>/dev/null)" || true
+  stty "$saved" 2>/dev/null
+}
+
 # Reads one key into KEY_KIND (enter|esc|back|char|ignored) and KEY.
 read_key() {
   KEY=""
@@ -76,9 +85,8 @@ read_key() {
   case "$KEY" in
     "") KEY_KIND="enter" ;;
     $'\e')
-      local rest=""
-      read -rsn2 -t 1 rest || true
-      if [[ -z "$rest" ]]; then KEY_KIND="esc"; else KEY_KIND="ignored"; fi
+      read_esc_tail
+      if [[ -z "$REST" ]]; then KEY_KIND="esc"; else KEY_KIND="ignored"; fi
       ;;
     $'\x7f'|$'\b') KEY_KIND="back" ;;
   esac
@@ -205,7 +213,7 @@ check_is_wear_project() {
   fi
 
   if [[ -n "$p_dir" && -d "$p_dir" ]]; then
-    if grep -rq --include="*Manifest*.xml" "android.hardware.type.watch" "$p_dir" 2>/dev/null; then
+    if grep -rq --include="*Manifest*.xml" --exclude-dir=build --exclude-dir=.git --exclude-dir=.gradle --exclude-dir=node_modules "android.hardware.type.watch" "$p_dir" 2>/dev/null; then
       return 0
     fi
   fi
@@ -1416,11 +1424,15 @@ action_open_editor() {
 }
 
 # Helper to extract live project info for dashboard
-build_git_info() {
-  local dir="$1" line staged=0 modified=0 untracked=0 ahead=0 behind=0 header="" out=""
+refresh_git_info() {
+  PROJECT_GIT_BRANCH=""
+  PROJECT_GIT_INFO=""
+  local dir="$CONFIG_project_dir"
+  [[ -d "$dir/.git" ]] || return 0
+  local line header="" staged=0 modified=0 untracked=0 ahead=0 behind=0 out=""
   while IFS= read -r line; do
     if [[ "$line" == "## "* ]]; then
-      header="$line"
+      header="${line#\#\# }"
       continue
     fi
     local x="${line:0:1}" y="${line:1:1}"
@@ -1431,6 +1443,9 @@ build_git_info() {
     [[ "$x" != " " ]] && staged=$((staged + 1))
     [[ "$y" != " " ]] && modified=$((modified + 1))
   done < <(git -C "$dir" status --porcelain=v1 -b 2>/dev/null)
+  local branch="${header#No commits yet on }"
+  branch="${branch%%...*}"
+  PROJECT_GIT_BRANCH="${branch%% *}"
   [[ "$header" =~ ahead\ ([0-9]+) ]] && ahead="${BASH_REMATCH[1]}"
   [[ "$header" =~ behind\ ([0-9]+) ]] && behind="${BASH_REMATCH[1]}"
   (( staged > 0 )) && out+="${C_SUCCESS}+${staged}${RESET} "
@@ -1439,50 +1454,53 @@ build_git_info() {
   (( ahead > 0 )) && out+="${C_PRIMARY}↑${ahead}${RESET} "
   (( behind > 0 )) && out+="${C_ACCENT}↓${behind}${RESET} "
   [[ -z "$out" ]] && out="${C_SUCCESS}clean${RESET}"
-  printf '%s' "$out"
+  PROJECT_GIT_INFO="$out"
+}
+
+refresh_gradle_info() {
+  PROJECT_SDK=""
+  PROJECT_VERSION=""
+  local gradle_file content
+  gradle_file=$(find_app_gradle_file)
+  [[ -n "$gradle_file" && -f "$gradle_file" ]] || return 0
+  content=$(<"$gradle_file")
+  local sdk_re='compileSdk([[:space:]]*=|[[:space:]]*\{[[:space:]]*version[[:space:]]*=([[:space:]]*release\()?)[[:space:]]*([0-9]+)'
+  local minor_re='compileSdkMinor[[:space:]]*=[[:space:]]*([0-9]+)'
+  local name_re='versionName[[:space:]]*=[[:space:]]*"([^"]*)"'
+  local code_re='versionCode[[:space:]]*=[[:space:]]*([0-9]+)'
+  local sdk="" minor="" v_name="" v_code=""
+  [[ "$content" =~ $sdk_re ]] && sdk="${BASH_REMATCH[3]}"
+  [[ "$content" =~ $minor_re ]] && minor="${BASH_REMATCH[1]}"
+  [[ "$content" =~ $name_re ]] && v_name="${BASH_REMATCH[1]}"
+  [[ "$content" =~ $code_re ]] && v_code="${BASH_REMATCH[1]}"
+  if [[ -n "$sdk" ]]; then
+    PROJECT_SDK="SDK $sdk${minor:+.$minor}"
+  fi
+  if [[ -n "$v_name" ]]; then
+    PROJECT_VERSION="v$v_name"
+    [[ -n "$v_code" ]] && PROJECT_VERSION="$PROJECT_VERSION ($v_code)"
+  fi
+}
+
+refresh_target_type() {
+  local key="${CONFIG_project_name}|${CONFIG_FILE:-}|$CONFIG_project_dir"
+  if [[ "${TARGET_TYPE_KEY:-}" != "$key" ]]; then
+    TARGET_TYPE_KEY="$key"
+    if check_is_wear_project "$CONFIG_project_name" "${CONFIG_FILE:-}" "$CONFIG_project_dir"; then
+      TARGET_TYPE_VALUE=" [WearOS]"
+    else
+      TARGET_TYPE_VALUE=" [Phone]"
+    fi
+  fi
+  PROJECT_TARGET_TYPE="$TARGET_TYPE_VALUE"
 }
 
 get_project_details() {
-  local p_dir="$CONFIG_project_dir"
-  PROJECT_GIT_BRANCH=""
-  PROJECT_GIT_INFO=""
-  PROJECT_SDK=""
-  PROJECT_VERSION=""
-  PROJECT_TARGET_TYPE=""
-
-  if [[ -d "$p_dir/.git" ]]; then
-    PROJECT_GIT_BRANCH=$(git -C "$p_dir" branch --show-current 2>/dev/null || echo "")
-    PROJECT_GIT_INFO=$(build_git_info "$p_dir")
-  fi
-
-  local gradle_file=$(find_app_gradle_file)
-  if [[ -n "$gradle_file" && -f "$gradle_file" ]]; then
-    local compile_sdk=$(grep -E "compileSdk([[:space:]]*=|[[:space:]]*\{[[:space:]]*version[[:space:]]*=([[:space:]]*release\()?)[[:space:]]*[0-9]+" "$gradle_file" | head -1 | grep -oE "[0-9]+" || echo "")
-    local compile_sdk_minor=$(grep -E "compileSdkMinor[[:space:]]*=[[:space:]]*[0-9]+" "$gradle_file" | head -1 | grep -oE "[0-9]+" || echo "")
-    local v_name=$(grep -E "versionName[[:space:]]*=[[:space:]]*\"" "$gradle_file" | head -1 | sed 's/.*"\(.*\)".*/\1/' || echo "")
-    local v_code=$(grep -E "versionCode[[:space:]]*=[[:space:]]*[0-9]+" "$gradle_file" | head -1 | grep -oE "[0-9]+" || echo "")
-    
-    if [[ -n "$compile_sdk" ]]; then
-      if [[ -n "$compile_sdk_minor" ]]; then
-        PROJECT_SDK="SDK $compile_sdk.$compile_sdk_minor"
-      else
-        PROJECT_SDK="SDK $compile_sdk"
-      fi
-    fi
-    if [[ -n "$v_name" ]]; then
-      PROJECT_VERSION="v$v_name"
-      [[ -n "$v_code" ]] && PROJECT_VERSION="$PROJECT_VERSION ($v_code)"
-    fi
-  fi
-
-  if check_is_wear_project "$CONFIG_project_name" "${CONFIG_FILE:-}" "$p_dir"; then
-    PROJECT_TARGET_TYPE=" [WearOS]"
-  else
-    PROJECT_TARGET_TYPE=" [Phone]"
-  fi
+  refresh_git_info
+  refresh_gradle_info
+  refresh_target_type
 }
 
-# --- Telegram (TIDWIB) ---
 load_env_secrets() {
   local env_file="$SCRIPT_DIR/.env"
   [[ -f "$env_file" ]] || return 0
@@ -1685,7 +1703,7 @@ prompt_release_output() {
         break
       elif [[ "$key" == $'\e' ]]; then
         local rest=""
-        read -rsn2 -t 1 rest || true
+        read_esc_tail; rest="$REST"
         if [[ -z "$rest" ]]; then
           echo ""
           return 0
@@ -1840,7 +1858,7 @@ git_do_add() {
 }
 
 git_draw() {
-  get_project_details
+  refresh_git_info
   print_header "git" "${C_SUCCESS}${PROJECT_GIT_BRANCH}${RESET} ${PROJECT_GIT_INFO}"
   print_menu_item "D" "Checkout & pull develop" "gd"
   print_menu_item "B" "New branch" "gb <name>"
@@ -1980,7 +1998,7 @@ gradle_props_menu() {
 }
 
 gradle_draw() {
-  get_project_details
+  refresh_gradle_info
   print_header "gradle" "${C_MUTED}${PROJECT_VERSION}${RESET}"
   print_menu_item "S" "Sync" "cs"
   print_menu_item "C" "Clean build" "cc"
@@ -2124,9 +2142,11 @@ show_dashboard() {
   local hist_file="$HOME/.android_build_history"
   [[ -f "$hist_file" ]] && history -r "$hist_file" 2>/dev/null || true
 
+  local keep_screen=0
   while true; do
     get_project_details
-    clear
+    if (( keep_screen )); then echo ""; else clear; fi
+    keep_screen=0
     echo -e "${BOLD}${C_PRIMARY}android-build${RESET}"
     print_divider
     echo -e "  ${BOLD}Project:${RESET}   ${C_ACCENT}${CONFIG_project_name}${RESET}${C_ACCENT}${PROJECT_TARGET_TYPE}${RESET} ${C_MUTED}${PROJECT_VERSION}${RESET}"
@@ -2196,13 +2216,13 @@ show_dashboard() {
             prompt_reinstall_or_esc || break
           done
         else
-          log_warn "Optimized dev build is not configured in this project." ; sleep 1
+          log_warn "Optimized dev build is not configured in this project."; keep_screen=1
         fi
         ;;
       l|L|3) run_and_pause action_logs ;;
-      f|F|5) echo ""; action_stop || true; sleep 1 ;;
-      s|S|4) echo ""; action_launch || true; sleep 1 ;;
-      m|M|7) echo ""; action_mirror || true; sleep 1 ;;
+      f|F|5) echo ""; action_stop || true; keep_screen=1 ;;
+      s|S|4) echo ""; action_launch || true; keep_screen=1 ;;
+      m|M|7) echo ""; action_mirror || true; keep_screen=1 ;;
       g|G) submenu_run git g ;;
       g[[:space:]]*|G[[:space:]]*|g[a-zA-Z]*|G[a-zA-Z]*) submenu_run git g "${opt:1}" once ;;
       t|T) run_and_pause action_format_code ;;
@@ -2218,9 +2238,10 @@ show_dashboard() {
         load_config "${CONFIG_FILE:-}"
         select_device
         ;;
-      e|E) action_open_editor || true; sleep 1 ;;
+      e|E) action_open_editor || true; keep_screen=1 ;;
       q|Q) quit_and_cleanup ;;
-      *) log_warn "Invalid input." ; sleep 1 ;;
+      "") ;;
+      *) log_warn "Invalid input."; keep_screen=1 ;;
     esac
   done
 }
