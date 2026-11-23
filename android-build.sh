@@ -52,7 +52,9 @@ print_header() {
 }
 
 print_menu_item() {
-  printf "  ${BOLD}%-5s${RESET} %-30s ${C_MUTED}%s${RESET}\n" "[$1]" "$2" "${3:-}"
+  local chevron=""
+  [[ -n "${4:-}" ]] && chevron=" ${C_MUTED}›${RESET}"
+  printf "  ${BOLD}%-5s${RESET} %-30s ${C_MUTED}%-14s${RESET}%b\n" "[$1]" "$2" "${3:-}" "$chevron"
 }
 
 print_back_hint() { echo -e "${C_MUTED}Press ${BOLD}[Esc]${RESET}${C_MUTED} to go back${RESET}"; }
@@ -2002,7 +2004,7 @@ gradle_draw() {
   print_header "gradle" "${C_MUTED}${PROJECT_VERSION}${RESET}"
   print_menu_item "S" "Sync" "cs"
   print_menu_item "C" "Clean build" "cc"
-  print_menu_item "P" "Properties" "cp"
+  print_menu_item "P" "Properties" "cp" menu
 }
 
 gradle_dispatch() {
@@ -2052,7 +2054,7 @@ show_dashboard() {
 
     # Section 3: Tools & Builds
     echo -e "  ${BOLD}[M]${RESET} Mirror"
-    echo -e "  ${BOLD}[C]${RESET} Configure Gradle"
+    echo -e "  ${BOLD}[C]${RESET} Configure Gradle ${C_MUTED}›${RESET}"
     echo -e "  ${BOLD}[T]${RESET} Format code"
     echo -e "  ${BOLD}[B]${RESET} Release build"
     echo -e "  ${BOLD}[Y]${RESET} Import icons"
@@ -2061,7 +2063,7 @@ show_dashboard() {
     # Section 4: Device & Project
     echo -e "  ${BOLD}[W]${RESET} Wireless ADB"
     echo -e "  ${BOLD}[D]${RESET} Switch Device"
-    echo -e "  ${BOLD}[G]${RESET} Git"
+    echo -e "  ${BOLD}[G]${RESET} Git ${C_MUTED}›${RESET}"
     echo -e "  ${BOLD}[P]${RESET} Switch Project"
     echo ""
 
