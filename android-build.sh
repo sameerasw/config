@@ -1364,15 +1364,43 @@ action_wireless_connect() {
 }
 
 # Helper to extract live project info for dashboard
+build_git_info() {
+  local dir="$1" line staged=0 modified=0 untracked=0 ahead=0 behind=0 header="" out=""
+  while IFS= read -r line; do
+    if [[ "$line" == "## "* ]]; then
+      header="$line"
+      continue
+    fi
+    local x="${line:0:1}" y="${line:1:1}"
+    if [[ "$x" == "?" ]]; then
+      untracked=$((untracked + 1))
+      continue
+    fi
+    [[ "$x" != " " ]] && staged=$((staged + 1))
+    [[ "$y" != " " ]] && modified=$((modified + 1))
+  done < <(git -C "$dir" status --porcelain=v1 -b 2>/dev/null)
+  [[ "$header" =~ ahead\ ([0-9]+) ]] && ahead="${BASH_REMATCH[1]}"
+  [[ "$header" =~ behind\ ([0-9]+) ]] && behind="${BASH_REMATCH[1]}"
+  (( staged > 0 )) && out+="${C_SUCCESS}+${staged}${RESET} "
+  (( modified > 0 )) && out+="${C_WARN}~${modified}${RESET} "
+  (( untracked > 0 )) && out+="${C_ERROR}?${untracked}${RESET} "
+  (( ahead > 0 )) && out+="${C_PRIMARY}↑${ahead}${RESET} "
+  (( behind > 0 )) && out+="${C_ACCENT}↓${behind}${RESET} "
+  [[ -z "$out" ]] && out="${C_SUCCESS}clean${RESET}"
+  printf '%s' "$out"
+}
+
 get_project_details() {
   local p_dir="$CONFIG_project_dir"
   PROJECT_GIT_BRANCH=""
+  PROJECT_GIT_INFO=""
   PROJECT_SDK=""
   PROJECT_VERSION=""
   PROJECT_TARGET_TYPE=""
 
   if [[ -d "$p_dir/.git" ]]; then
     PROJECT_GIT_BRANCH=$(git -C "$p_dir" branch --show-current 2>/dev/null || echo "")
+    PROJECT_GIT_INFO=$(build_git_info "$p_dir")
   fi
 
   local gradle_file=$(find_app_gradle_file)
@@ -1639,6 +1667,195 @@ prompt_reinstall_or_esc() {
   done
 }
 
+git_trim() {
+  local v="$1"
+  v="${v#"${v%%[![:space:]]*}"}"
+  v="${v%"${v##*[![:space:]]}"}"
+  printf '%s' "$v"
+}
+
+git_read_line() {
+  GIT_LINE=""
+  local key rest
+  echo -en "$1"
+  while true; do
+    IFS= read -rsn1 key || { echo ""; return 1; }
+    if [[ -z "$key" ]]; then
+      echo ""
+      return 0
+    elif [[ "$key" == $'\e' ]]; then
+      rest=""
+      read -rsn2 -t 1 rest || true
+      if [[ -z "$rest" ]]; then
+        echo ""
+        return 1
+      fi
+    elif [[ "$key" == $'\x7f' || "$key" == $'\b' ]]; then
+      if [[ -n "$GIT_LINE" ]]; then
+        GIT_LINE="${GIT_LINE%?}"
+        echo -en "\b \b"
+      fi
+    else
+      GIT_LINE+="$key"
+      printf '%s' "$key"
+    fi
+  done
+}
+
+git_ask() {
+  local label="$1" val=""
+  git_read_line "$label (Esc to cancel): " || return 1
+  val="$(git_trim "$GIT_LINE")"
+  [[ -z "$val" ]] && return 1
+  printf '%s' "$val"
+}
+
+git_in_project() {
+  cd "$CONFIG_project_dir" || return 1
+  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    log_error "$CONFIG_project_dir is not a git repository."
+    return 1
+  fi
+}
+
+git_do_develop() {
+  git_in_project || return 1
+  git checkout develop && git pull
+}
+
+git_do_new_branch() {
+  git_in_project || return 1
+  local name="$1"
+  [[ -z "$name" ]] && { name="$(git_ask "New branch name")" || return 1; }
+  git checkout -b "$name"
+}
+
+git_do_switch() {
+  git_in_project || return 1
+  local name="$1"
+  if [[ -z "$name" ]]; then
+    local branches=()
+    while IFS= read -r b; do
+      [[ -n "$b" ]] && branches+=("$b")
+    done < <(git for-each-ref --sort=-committerdate --count=10 --format='%(refname:short)' refs/heads)
+    if (( ${#branches[@]} == 0 )); then
+      log_warn "No local branches found."
+      return 1
+    fi
+    local current
+    current="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    local i=1
+    for b in "${branches[@]}"; do
+      if [[ "$b" == "$current" ]]; then
+        echo -e "  ${BOLD}$i)${RESET} ${C_SUCCESS}$b${RESET} ${C_MUTED}(current)${RESET}"
+      else
+        echo -e "  ${BOLD}$i)${RESET} $b"
+      fi
+      i=$((i + 1))
+    done
+    local pick
+    pick="$(git_ask "Select branch [1-${#branches[@]}] or type a name")" || return 1
+    if [[ "$pick" =~ ^[0-9]+$ ]] && (( pick >= 1 && pick <= ${#branches[@]} )); then
+      name="${branches[$((pick - 1))]}"
+    else
+      name="$pick"
+    fi
+  fi
+  git checkout "$name"
+}
+
+git_do_pr() {
+  git_in_project || return 1
+  if ! command -v gh >/dev/null 2>&1; then
+    log_error "GitHub CLI (gh) is not installed."
+    return 1
+  fi
+  local id="$1"
+  [[ -z "$id" ]] && { id="$(git_ask "PR number")" || return 1; }
+  id="${id#\#}"
+  if [[ ! "$id" =~ ^[0-9]+$ ]]; then
+    log_error "Invalid PR number '$id'."
+    return 1
+  fi
+  gh pr checkout "$id"
+}
+
+git_do_commit() {
+  git_in_project || return 1
+  local msg="$1"
+  [[ -z "$msg" ]] && { msg="$(git_ask "Commit message")" || return 1; }
+  if [[ ${#msg} -ge 2 && ( ( "${msg:0:1}" == '"' && "${msg: -1}" == '"' ) || ( "${msg:0:1}" == "'" && "${msg: -1}" == "'" ) ) ]]; then
+    msg="${msg:1:${#msg}-2}"
+  fi
+  git commit -m "$msg"
+}
+
+git_do_add() {
+  git_in_project || return 1
+  git add . && log_success "Staged all changes."
+}
+
+git_dispatch() {
+  local sub="$1" arg="$2"
+  case "$sub" in
+    d) git_do_develop ;;
+    b) git_do_new_branch "$arg" ;;
+    s) git_do_switch "$arg" ;;
+    pr) git_do_pr "$arg" ;;
+    c) git_do_commit "$arg" ;;
+    a) git_do_add ;;
+    *) log_warn "Unknown git command '$sub'."; return 1 ;;
+  esac
+}
+
+git_menu() {
+  local input="${1:-}" once="${2:-}"
+  local first=1
+  while true; do
+    if [[ -z "$input" ]]; then
+      (( first )) && clear
+      first=0
+      echo ""
+      get_project_details
+      echo -e "${BOLD}${C_PRIMARY}git${RESET} ${C_SUCCESS}${PROJECT_GIT_BRANCH}${RESET} ${PROJECT_GIT_INFO}"
+      echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"
+      echo -e "  ${BOLD}[D]${RESET} Checkout & pull develop"
+      echo -e "  ${BOLD}[B]${RESET} New branch      ${C_MUTED}gb <name>${RESET}"
+      echo -e "  ${BOLD}[S]${RESET} Switch branch   ${C_MUTED}gs <name>${RESET}"
+      echo -e "  ${BOLD}[PR]${RESET} Checkout PR    ${C_MUTED}gpr <id|#id>${RESET}"
+      echo -e "  ${BOLD}[C]${RESET} Commit          ${C_MUTED}gc <message>${RESET}"
+      echo -e "  ${BOLD}[A]${RESET} Add all         ${C_MUTED}(git add .)${RESET}"
+      echo -e "${C_MUTED}Press ${BOLD}[Esc]${RESET}${C_MUTED} to go back${RESET}"
+      git_read_line "git> " || return 0
+      input="$GIT_LINE"
+    fi
+    input="$(git_trim "$input")"
+    if [[ -z "$input" ]]; then
+      continue
+    fi
+    if [[ "$input" =~ ^[gG]([a-zA-Z]|[[:space:]]) ]]; then
+      input="$(git_trim "${input:1}")"
+    fi
+    local sub="${input%%[[:space:]]*}"
+    local arg=""
+    if [[ "$input" == *[[:space:]]* ]]; then
+      arg="$(git_trim "${input#"$sub"}")"
+    fi
+    sub="$(printf '%s' "$sub" | tr '[:upper:]' '[:lower:]')"
+    echo ""
+    if git_dispatch "$sub" "$arg"; then
+      log_success "Done."
+    else
+      log_warn "Git command did not complete."
+    fi
+    if [[ -n "$once" ]]; then
+      read -rp "Press Enter to return..."
+      return 0
+    fi
+    input=""
+  done
+}
+
 # --- Interactive TUI Dashboard ---
 show_dashboard() {
   select_device
@@ -1653,9 +1870,9 @@ show_dashboard() {
     echo -e "${BOLD}${C_PRIMARY}android-build${RESET}"
     echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"
     echo -e "  ${BOLD}Project:${RESET}   ${C_ACCENT}${CONFIG_project_name}${RESET}${C_ACCENT}${PROJECT_TARGET_TYPE}${RESET} ${C_MUTED}${PROJECT_VERSION}${RESET}"
-    echo -e "  ${BOLD}Package:${RESET}   ${C_PRIMARY}${CONFIG_package_name}${RESET}"
-    if [[ -n "$PROJECT_GIT_BRANCH" || -n "$PROJECT_SDK" ]]; then
-      echo -e "  ${BOLD}Branch:${RESET}    ${C_SUCCESS}${PROJECT_GIT_BRANCH:-main}${RESET}  ${C_MUTED}${PROJECT_SDK}${RESET}"
+    echo -e "  ${BOLD}Package:${RESET}   ${C_PRIMARY}${CONFIG_package_name}${RESET} ${C_MUTED}${PROJECT_SDK}${RESET}"
+    if [[ -n "$PROJECT_GIT_BRANCH" ]]; then
+      echo -e "  ${BOLD}Git:${RESET}       ${C_SUCCESS}${PROJECT_GIT_BRANCH}${RESET} ${PROJECT_GIT_INFO}"
     fi
     echo -e "  ${BOLD}Device:${RESET}    ${C_SUCCESS}${SELECTED_DEVICE}${RESET}"
     echo -e "  ${BOLD}Task:${RESET}      ${C_WARN}${CONFIG_gradle_task}${RESET} [${CONFIG_build_variant}]"
@@ -1677,7 +1894,7 @@ show_dashboard() {
 
     # Section 3: Tools & Builds
     echo -e "  ${BOLD}[M]${RESET} Mirror"
-    echo -e "  ${BOLD}[G]${RESET} Gradle Sync"
+    echo -e "  ${BOLD}[U]${RESET} Gradle Sync"
     echo -e "  ${BOLD}[T]${RESET} Format code"
     echo -e "  ${BOLD}[C]${RESET} Clean build"
     echo -e "  ${BOLD}[B]${RESET} Release build"
@@ -1687,6 +1904,7 @@ show_dashboard() {
     # Section 4: Device & Project
     echo -e "  ${BOLD}[W]${RESET} Wireless ADB"
     echo -e "  ${BOLD}[D]${RESET} Switch Device"
+    echo -e "  ${BOLD}[G]${RESET} Git"
     echo -e "  ${BOLD}[P]${RESET} Switch Project"
     echo ""
 
@@ -1727,7 +1945,9 @@ show_dashboard() {
       f|F|5) echo ""; action_stop || true; sleep 1 ;;
       s|S|4) echo ""; action_launch || true; sleep 1 ;;
       m|M|7) echo ""; action_mirror || true; sleep 1 ;;
-      g|G) echo ""; action_sync || true; read -rp "Press Enter to return..." ;;
+      u|U) echo ""; action_sync || true; read -rp "Press Enter to return..." ;;
+      g|G) git_menu "" ;;
+      g[[:space:]]*|G[[:space:]]*|g[a-zA-Z]*|G[a-zA-Z]*) git_menu "${opt:1}" once ;;
       t|T) echo ""; action_format_code || true; read -rp "Press Enter to return..." ;;
       c|C|6) echo ""; action_clean || true; read -rp "Press Enter to return..." ;;
       b|B) echo ""; action_build_release || read -rp "Press Enter to return..." ;;
@@ -1784,7 +2004,7 @@ show_help() {
   echo -e "  release (B)         Build release bundle / APK"
   echo -e "  icons (Y)           Import Material Symbols drawables"
   echo -e "  mirror (M)          Launch scrcpy screen mirroring"
-  echo -e "  sync (G)            Run Gradle sync & daemon check"
+  echo -e "  sync (U)            Run Gradle sync & daemon check"
   echo -e "  wifi (W)            Wireless ADB connection helper"
   echo -e "  devices (D)         List connected devices"
   echo -e "  project (P)         Switch active project"
