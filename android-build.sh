@@ -48,6 +48,7 @@ log_warn()    { echo -e "${C_WARN}[WARN]${RESET} $*"; }
 log_error()   { echo -e "${C_ERROR}[ERROR]${RESET} $*" >&2; }
 
 # --- Shared TUI helpers ---
+BOX_OPEN=0
 UI_W=60
 UI_LINE_W=""
 UI_LINE=""
@@ -58,7 +59,7 @@ ui_refresh_width() {
   cols=$(tput cols 2>/dev/null || echo 80)
   UI_W=$((cols - 2))
   (( UI_W > 74 )) && UI_W=74
-  (( UI_W < 46 )) && UI_W=46
+  (( UI_W < 54 )) && UI_W=54
   if [[ "$UI_LINE_W" != "$UI_W" ]]; then
     printf -v UI_LINE '%*s' "$UI_W" ''
     UI_LINE="${UI_LINE// /─}"
@@ -72,16 +73,54 @@ plain_text() { printf '%s' "${1//$UI_ANSI_RE/}"; }
 print_divider() { echo -e "  ${C_MUTED}${UI_LINE:0:$((UI_W - 2))}${RESET}"; }
 
 box_top() {
-  local fill=$((UI_W - 5 - ${#1}))
-  printf '%b\n' "${C_MUTED}╭─${RESET} ${BOLD}${C_PRIMARY}$1${RESET} ${C_MUTED}${UI_LINE:0:$fill}╮${RESET}"
+  truncate_ansi "$1" $((UI_W - 6)); local title="$TRUNC"
+  local tplain="${title//$UI_ANSI_RE/}" fill
+  fill=$((UI_W - 5 - ${#tplain}))
+  (( fill < 0 )) && fill=0
+  printf '%b\n' "${C_MUTED}╭─${RESET} ${BOLD}${C_PRIMARY}$title${RESET} ${C_MUTED}${UI_LINE:0:$fill}╮${RESET}"
 }
 
-box_bottom() { printf '%b\n' "${C_MUTED}╰${UI_LINE:0:$((UI_W - 2))}╯${RESET}"; }
+box_bottom() {
+  BOX_OPEN=0
+  printf '%b\n' "${C_MUTED}╰${UI_LINE:0:$((UI_W - 2))}╯${RESET}"
+}
+
+# Shortens a string with embedded color codes to <max> visible chars, ending in an ellipsis; result in TRUNC.
+truncate_ansi() {
+  local s="$1" max="$2" plain="${1//$UI_ANSI_RE/}"
+  if (( ${#plain} <= max )); then
+    TRUNC="$s"
+    return 0
+  fi
+  local out="" vis=0 i=0 len=${#1} j
+  while (( i < len )); do
+    if [[ "${s:i:5}" == '\033[' ]]; then
+      j=$i
+      while (( j < len )) && [[ "${s:j:1}" != "m" ]]; do j=$((j + 1)); done
+      out+="${s:i:$((j - i + 1))}"
+      i=$((j + 1))
+      continue
+    fi
+    (( vis >= max - 1 )) && break
+    out+="${s:i:1}"
+    vis=$((vis + 1))
+    i=$((i + 1))
+  done
+  TRUNC="${out}…${RESET}"
+}
 
 box_row() {
-  local left="$1" right="${2:-}"
+  local left="$1" right="${2:-}" avail=$((UI_W - 4))
   local pl="${left//$UI_ANSI_RE/}" pr="${right//$UI_ANSI_RE/}"
-  local pad=$((UI_W - 4 - ${#pl} - ${#pr}))
+  if (( ${#pl} + ${#pr} + 1 > avail )); then
+    if (( avail - ${#pr} - 1 < avail / 2 )); then
+      truncate_ansi "$right" $((avail - avail / 2 - 1)); right="$TRUNC"
+      pr="${right//$UI_ANSI_RE/}"
+    fi
+    truncate_ansi "$left" $((avail - ${#pr} - 1)); left="$TRUNC"
+    pl="${left//$UI_ANSI_RE/}"
+  fi
+  local pad=$((avail - ${#pl} - ${#pr}))
   (( pad < 1 )) && pad=1
   printf '%b%*s%b\n' "${C_MUTED}│${RESET} $left" "$pad" '' "$right ${C_MUTED}│${RESET}"
 }
@@ -95,21 +134,93 @@ print_header() {
 }
 
 print_section() {
-  local fill=$((UI_W - 5 - ${#1}))
-  printf '%b\n' "  ${C_MUTED}${BOLD}$1${RESET} ${C_MUTED}${UI_LINE:0:$fill}${RESET}"
+  if (( BOX_OPEN )); then box_titled "├" "┤" "$1"; else box_titled "╭" "╮" "$1"; fi
 }
 
 print_menu_item() {
-  local label="$2" plain label_pad key chevron=""
-  [[ -n "${4:-}" ]] && chevron=1
-  plain="${label//$UI_ANSI_RE/}${chevron:+ ›}"
-  printf -v label_pad '%*s' "$((28 - ${#plain}))" ''
-  (( ${#plain} >= 28 )) && label_pad=" "
+  local label="$2" key chevron=""
+  [[ -n "${4:-}" ]] && chevron=" ${C_ACCENT}›${RESET}"
+  if (( ! BOX_OPEN )); then
+    printf '%b\n' "${C_MUTED}╭${UI_LINE:0:$((UI_W - 2))}╮${RESET}"
+    BOX_OPEN=1
+  fi
   printf -v key '%-2s' "$1"
-  printf '%b\n' "  \033[48;5;238m${C_PRIMARY}${BOLD} ${key} ${RESET}  ${label}${chevron:+ ${C_ACCENT}›${RESET}}${label_pad}${C_MUTED}${3:-}${RESET}"
+  box_row "\033[48;5;238m${C_PRIMARY}${BOLD} ${key} ${RESET}  ${label}${chevron}" "${C_MUTED}${3:-}${RESET}"
 }
 
-print_back_hint() { echo -e "  ${C_MUTED}Esc${RESET} ${C_MUTED}go back${RESET}"; }
+GRID_CELLS=()
+
+# Draws a titled box edge: box_titled <left> <right> <title>
+box_titled() {
+  truncate_ansi "$3" $((UI_W - 6)); local title="$TRUNC"
+  local tplain="${title//$UI_ANSI_RE/}" fill
+  fill=$((UI_W - 5 - ${#tplain}))
+  (( fill < 0 )) && fill=0
+  if [[ "$1" == "╰" ]]; then BOX_OPEN=0; else BOX_OPEN=1; fi
+  printf '%b\n' "${C_MUTED}$1─${RESET} ${C_MUTED}${BOLD}$title${RESET} ${C_MUTED}${UI_LINE:0:$fill}$2${RESET}"
+}
+
+# Queues a compact two-column menu cell; grid_flush prints the queued cells.
+grid_item() {
+  local label="$2" plain pad key chevron="${3:-}"
+  local col_w=$(( (UI_W - 4) / 2 ))
+  local extra=0
+  [[ -n "$chevron" ]] && extra=2
+  truncate_ansi "$label" $((col_w - 6 - extra)); label="$TRUNC"
+  plain="${label//$UI_ANSI_RE/}${chevron:+ ›}"
+  printf -v pad '%*s' "$(( col_w - 6 - ${#plain} ))" ''
+  printf -v key '%-2s' "$1"
+  GRID_CELLS+=("\033[48;5;238m${C_PRIMARY}${BOLD} ${key} ${RESET}  ${label}${chevron:+ ${C_ACCENT}›${RESET}}${pad}")
+}
+
+grid_flush() {
+  local i col_w=$(( (UI_W - 4) / 2 )) tail_pad
+  printf -v tail_pad '%*s' "$(( UI_W - 4 - 2 * col_w ))" ''
+  for ((i = 0; i < ${#GRID_CELLS[@]}; i += 2)); do
+    local second="${GRID_CELLS[$((i + 1))]:-}"
+    if [[ -z "$second" ]]; then
+      printf -v second '%*s' "$col_w" ''
+    fi
+    printf '%b\n' "${C_MUTED}│${RESET} ${GRID_CELLS[$i]}${second}${tail_pad} ${C_MUTED}│${RESET}"
+  done
+  GRID_CELLS=()
+}
+
+print_back_hint() {
+  if (( BOX_OPEN )); then
+    box_titled "╰" "╯" "Esc to go back"
+  else
+    echo -e "  ${C_MUTED}Esc to go back${RESET}"
+  fi
+}
+
+# Boxed numbered picker on stderr: pick_option <title> <default> <label[|hint]>...; sets PICK_INDEX, returns 1 on Esc.
+pick_option() {
+  local title="$1" default="$2"
+  shift 2
+  local items=("$@") n=$# i label hint
+  ui_refresh_width
+  {
+    echo ""
+    box_titled "╭" "╮" "$title"
+    for i in "${!items[@]}"; do
+      label="${items[$i]%%|*}"
+      hint=""
+      [[ "${items[$i]}" == *"|"* ]] && hint="${items[$i]#*|}"
+      print_menu_item "$((i + 1))" "$label" "$hint"
+    done
+    box_bottom
+  } >&2
+  while true; do
+    read_line_esc "  ${C_ACCENT}❯${RESET} ${C_MUTED}[1-$n, Enter = $default, Esc cancels]${RESET} " || return 1
+    PICK_INDEX="$(trim "$INPUT_LINE")"
+    PICK_INDEX="${PICK_INDEX:-$default}"
+    if [[ "$PICK_INDEX" =~ ^[0-9]+$ ]] && (( PICK_INDEX >= 1 && PICK_INDEX <= n )); then
+      return 0
+    fi
+    log_warn "Invalid input." >&2
+  done
+}
 
 trim() {
   local v="$1"
@@ -147,20 +258,20 @@ read_key() {
 # Reads a line into INPUT_LINE; returns 1 when cancelled with Esc.
 read_line_esc() {
   INPUT_LINE=""
-  echo -en "$1"
+  echo -en "$1" >&2
   while true; do
     read_key
     case "$KEY_KIND" in
-      enter) echo ""; return 0 ;;
-      esc) echo ""; return 1 ;;
+      enter) echo "" >&2; return 0 ;;
+      esc) echo "" >&2; return 1 ;;
       ignored) ;;
       back)
         if [[ -n "$INPUT_LINE" ]]; then
           INPUT_LINE="${INPUT_LINE%?}"
-          echo -en "\b \b"
+          echo -en "\b \b" >&2
         fi
         ;;
-      *) INPUT_LINE+="$KEY"; printf '%s' "$KEY" ;;
+      *) INPUT_LINE+="$KEY"; printf '%s' "$KEY" >&2 ;;
     esac
   done
 }
@@ -173,7 +284,10 @@ ask_value() {
   [[ -n "$ASK_RESULT" ]]
 }
 
-pause_return() { read -rp "Press Enter to return..." || true; }
+pause_return() {
+  echo -en "  ${C_MUTED}Press Enter to return...${RESET}"
+  read -r || true
+}
 
 run_and_pause() {
   echo ""
@@ -273,6 +387,10 @@ check_is_wear_project() {
   return 1
 }
 
+get_config_val_from() {
+  grep -E "^[[:space:]]*$2[[:space:]]*=" "$1" 2>/dev/null | head -1 | cut -d'=' -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true
+}
+
 select_project_interactive() {
   local config_files=()
   while IFS= read -r f; do
@@ -290,44 +408,22 @@ select_project_interactive() {
   fi
 
   clear
-  echo -e "${BOLD}${C_PRIMARY}android-build${RESET}"
-  print_divider
-  echo -e "Available Projects:"
-  local i=1
+  local items=() cfg
   for cfg in "${config_files[@]}"; do
-    local p_name=$(grep -E "^[[:space:]]*project_name[[:space:]]*=" "$cfg" 2>/dev/null | head -1 | cut -d'=' -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true)
+    local p_name p_pkg p_dir badge
+    p_name=$(get_config_val_from "$cfg" project_name)
     [[ -z "$p_name" ]] && p_name=$(basename "$cfg" .android.config)
-    local p_pkg=$(grep -E "^[[:space:]]*package_name[[:space:]]*=" "$cfg" 2>/dev/null | head -1 | cut -d'=' -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true)
-    local p_dir=$(grep -E "^[[:space:]]*project_dir[[:space:]]*=" "$cfg" 2>/dev/null | head -1 | cut -d'=' -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true)
-    
-    local type_badge=""
+    p_pkg=$(get_config_val_from "$cfg" package_name)
+    p_dir=$(get_config_val_from "$cfg" project_dir)
     if check_is_wear_project "$p_name" "$cfg" "$p_dir"; then
-      type_badge=" ${C_ACCENT}[WearOS]${RESET}"
+      badge="${C_ACCENT}[WearOS]${RESET}"
     else
-      type_badge=" ${C_PRIMARY}[Phone]${RESET}"
+      badge="${C_PRIMARY}[Phone]${RESET}"
     fi
-
-    printf "  ${BOLD}[%d]${RESET} %-24s%b ${C_MUTED}(%s)${RESET}\n" "$i" "$p_name" "$type_badge" "$p_pkg"
-    ((i++))
+    items+=("${p_name} ${badge}|${p_pkg}")
   done
-  print_divider
-  while true; do
-    read -rp "Select project [1-$count] (default 1): " choice
-    choice="${choice:-1}"
-    case "$choice" in
-      [1-9]|[1-9][0-9])
-        if [ "$choice" -ge 1 ] && [ "$choice" -le "$count" ]; then
-          CONFIG_FILE="${config_files[$((choice-1))]}"
-          break
-        else
-          log_warn "Invalid input."
-        fi
-        ;;
-      *)
-        log_warn "Invalid input."
-        ;;
-    esac
-  done
+  pick_option "Select project" 1 "${items[@]}" || PICK_INDEX=1
+  CONFIG_FILE="${config_files[$((PICK_INDEX - 1))]}"
 }
 
 load_config() {
@@ -504,35 +600,17 @@ select_device() {
   if [[ "$count" -eq 1 ]]; then
     picked_dev=$(echo "$devices_output" | awk '{print $1}')
   else
-    echo -e "\n${BOLD}${C_PRIMARY}Multiple Android Devices Detected:${RESET}"
-    local i=1
-    declare -a dev_arr=()
+    declare -a dev_arr=() dev_items=()
+    local line serial model prod
     while IFS= read -r line; do
-      local serial=$(echo "$line" | awk '{print $1}')
-      local model=$(echo "$line" | grep -o 'model:[^ ]*' | cut -d':' -f2 || echo "")
-      local prod=$(echo "$line" | grep -o 'product:[^ ]*' | cut -d':' -f2 || echo "")
+      serial=$(echo "$line" | awk '{print $1}')
+      model=$(echo "$line" | grep -o 'model:[^ ]*' | cut -d':' -f2 || echo "")
+      prod=$(echo "$line" | grep -o 'product:[^ ]*' | cut -d':' -f2 || echo "")
       dev_arr+=("$serial")
-      printf "  ${BOLD}[%d]${RESET} %-25s ${C_MUTED}(%s %s)${RESET}\n" "$i" "$serial" "$model" "$prod"
-      ((i++))
+      dev_items+=("${serial}|${model} ${prod}")
     done <<< "$devices_output"
-
-    while true; do
-      read -rp "Select device [1-$count] (default 1): " choice
-      choice="${choice:-1}"
-      case "$choice" in
-        [1-9]|[1-9][0-9])
-          if [ "$choice" -ge 1 ] && [ "$choice" -le "$count" ]; then
-            picked_dev="${dev_arr[$((choice-1))]}"
-            break
-          else
-            log_warn "Invalid input."
-          fi
-          ;;
-        *)
-          log_warn "Invalid input."
-          ;;
-      esac
-    done
+    pick_option "Select device" 1 "${dev_items[@]}" || PICK_INDEX=1
+    picked_dev="${dev_arr[$((PICK_INDEX - 1))]}"
   fi
 
   SELECTED_DEVICE="$picked_dev"
@@ -786,24 +864,11 @@ action_build_release() {
     if (( ${#all_flavors[@]} == 1 )); then
       flavors=("${all_flavors[0]}")
     else
-      echo -e "\n${BOLD}${C_PRIMARY}=== Release flavor ===${RESET}"
-      local i=1
-      for f in "${all_flavors[@]}"; do
-        echo -e "  ${BOLD}[$i]${RESET} $f"
-        i=$((i + 1))
-      done
-      echo -e "  ${BOLD}[A]${RESET} all"
-      echo -en "${C_PRIMARY}Choose [A]: ${RESET}"
-      local choice
-      read -r choice
-      choice="${choice:-A}"
-      if [[ "$choice" =~ ^[Aa]$ ]]; then
+      pick_option "Release flavor" $(( ${#all_flavors[@]} + 1 )) "${all_flavors[@]}" "All flavors" || return 1
+      if (( PICK_INDEX > ${#all_flavors[@]} )); then
         flavors=("${all_flavors[@]}")
-      elif [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#all_flavors[@]} )); then
-        flavors=("${all_flavors[$((choice - 1))]}")
       else
-        log_error "Invalid choice."
-        return 1
+        flavors=("${all_flavors[$((PICK_INDEX - 1))]}")
       fi
     fi
   fi
@@ -1049,9 +1114,9 @@ action_import_icons() {
     return 1
   fi
 
-  echo -e "\n${BOLD}${C_PRIMARY}=== Add Material Drawable Icons ===${RESET}"
-  echo -e "${C_MUTED}Enter icon name(s) (comma or space separated, e.g. 'device_thermostat, speed, search' or 'e1ff'):${RESET}"
-  read -rp "> " icon_input
+  print_header "Material icons" "${C_MUTED}comma or space separated, e.g. speed, search, e1ff${RESET}"
+  ask_value "Icon name(s)" || { log_warn "No icon names provided."; return 0; }
+  local icon_input="$ASK_RESULT"
 
   if [[ -z "$icon_input" ]]; then
     log_warn "No icon names provided."
@@ -1167,13 +1232,8 @@ action_format_code() {
   local ktlint_exe
   ktlint_exe=$(ensure_ktlint) || return 1
 
-  echo -e "\n${BOLD}${C_PRIMARY}=== Format & Optimize Kotlin Code ===${RESET}"
-  echo -e "  ${BOLD}[1]${RESET} Modified files only (Git diff - fast)"
-  echo -e "  ${BOLD}[2]${RESET} Entire project"
-  echo -e "  ${BOLD}[3]${RESET} Specific directory or file"
-  print_divider
-  read -rp "Select scope [1-3] (default 1): " f_choice
-  f_choice="${f_choice:-1}"
+  pick_option "Format Kotlin" 1 "Modified files only|git diff, fast" "Entire project" "Specific directory or file" || return 0
+  local f_choice="$PICK_INDEX"
 
   cd "$CONFIG_project_dir"
 
@@ -1199,7 +1259,8 @@ action_format_code() {
       log_success "Entire project formatted."
       ;;
     3)
-      read -rp "Enter relative directory or file path: " target_input
+      ask_value "Relative directory or file path" || return 0
+      local target_input="$ASK_RESULT"
       if [[ -n "$target_input" && -e "$CONFIG_project_dir/$target_input" ]]; then
         log_info "Formatting '$target_input'..."
         "$ktlint_exe" --format "$CONFIG_project_dir/$target_input" || true
@@ -1244,7 +1305,7 @@ action_logs() {
     return 1
   fi
 
-  echo -e "${BOLD}${C_PRIMARY}=== Live Logcat: ${C_ACCENT}$CONFIG_package_name${C_PRIMARY} on ${SELECTED_DEVICE} ===${RESET}"
+  print_header "Live Logcat" "${C_ACCENT}${CONFIG_package_name}${RESET}" "${C_MUTED}${SELECTED_DEVICE}${RESET}"
   echo -e "${C_MUTED}Press Ctrl+C to stop.${RESET}\n"
 
   # Trap Ctrl+C cleanly to return instead of exiting script
@@ -1360,22 +1421,9 @@ choose_debug_flavor() {
     echo "${all_flavors[0]}"
     return 0
   fi
-  echo -e "\n${BOLD}${C_PRIMARY}=== Build flavor ===${RESET}" >&2
-  local i=1
-  for f in "${all_flavors[@]}"; do
-    echo -e "  ${BOLD}[$i]${RESET} $f" >&2
-    i=$((i + 1))
-  done
-  echo -en "${C_PRIMARY}Choose [1]: ${RESET}" >&2
-  local choice
-  read -r choice
-  choice="${choice:-1}"
-  if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#all_flavors[@]} )); then
-    echo "${all_flavors[$((choice - 1))]}"
-    return 0
-  fi
-  log_error "Invalid choice." >&2
-  return 1
+  pick_option "Build flavor" 1 "${all_flavors[@]}" || return 1
+  echo "${all_flavors[$((PICK_INDEX - 1))]}"
+  return 0
 }
 
 action_optimized_debug() {
@@ -2024,11 +2072,12 @@ gradle_props_menu() {
     clear
     print_header "gradle properties" "${C_PRIMARY}${gradle_file#$CONFIG_project_dir/}${RESET}"
     local i
+    print_section "PROPERTIES"
     for i in "${!keys[@]}"; do
       print_menu_item "$((i + 1))" "${keys[$i]}" "${vals[$i]}"
     done
-    echo ""
-    echo -e "  ${C_MUTED}number to edit  ·  <n> <value> to set  ·  <n>+ to bump${RESET}"
+    box_titled "├" "┤" "EDIT"
+    box_row "${C_MUTED}<n> edit  ·  <n> <value> set  ·  <n>+ bump${RESET}"
     print_back_hint
     [[ -n "$status" ]] && echo -e "$status"
     status=""
@@ -2076,6 +2125,7 @@ gradle_props_menu() {
 gradle_draw() {
   refresh_gradle_info
   print_header "gradle" "${C_PRIMARY}${CONFIG_project_name}${RESET}" "${C_MUTED}${PROJECT_VERSION}${RESET}"
+  print_section "ACTIONS"
   print_menu_item "S" "Sync" "cs"
   print_menu_item "C" "Clean build" "cc"
   print_menu_item "P" "Properties" "cp" menu
@@ -2093,6 +2143,7 @@ gradle_dispatch() {
 # --- App submenu ---
 app_draw() {
   print_header "app" "${C_PRIMARY}${CONFIG_package_name}${RESET}"
+  print_section "ACTIONS"
   print_menu_item "S" "Start" "as"
   print_menu_item "F" "Force stop" "af"
 }
@@ -2126,7 +2177,7 @@ devices_draw() {
   print_header "devices" "${C_SUCCESS}${current}${RESET}"
   print_section "CONNECTED"
   if (( ${#DEV_SERIALS[@]} == 0 )); then
-    echo -e "  ${C_MUTED}No devices connected${RESET}"
+    box_row "${C_MUTED}No devices connected${RESET}"
   fi
   local i serial marker kind
   for i in "${!DEV_SERIALS[@]}"; do
@@ -2270,34 +2321,37 @@ show_dashboard() {
       box_row "${C_WARN}±${RESET} ${C_SUCCESS}${PROJECT_GIT_BRANCH}${RESET}  ${PROJECT_GIT_INFO}"
     fi
     box_bottom
-    echo ""
 
-    print_section "BUILD"
+    box_titled "╭" "╮" "BUILD"
     if [[ "$CONFIG_show_run_debug" == "true" ]]; then
-      print_menu_item "R" "Run & Debug"
+      grid_item "R" "Run & Debug"
     fi
-    print_menu_item "I" "Install Debug"
+    grid_item "I" "Install Debug"
     if has_optimized_build_config; then
-      print_menu_item "O" "Optimized debug"
+      grid_item "O" "Optimized debug"
     fi
-    print_menu_item "B" "Release build"
-    print_menu_item "L" "Logcat"
+    grid_item "B" "Release build"
+    grid_item "L" "Logcat"
+    grid_flush
 
-    print_section "PROJECT"
-    print_menu_item "C" "Configure Gradle" "cs cc cp" menu
-    print_menu_item "T" "Format code"
-    print_menu_item "Y" "Import icons"
-    print_menu_item "G" "Git" "gd gb gs gpr gc ga" menu
-    print_menu_item "P" "Switch project"
+    box_titled "├" "┤" "PROJECT"
+    grid_item "C" "Configure Gradle" menu
+    grid_item "G" "Git" menu
+    grid_item "T" "Format code"
+    grid_item "Y" "Import icons"
+    grid_item "P" "Switch project"
+    grid_flush
 
-    print_section "DEVICE"
-    print_menu_item "A" "App" "as af" menu
-    print_menu_item "D" "Devices" "dw dm dp dx" menu
+    box_titled "├" "┤" "DEVICE"
+    grid_item "A" "App" menu
+    grid_item "D" "Devices" menu
+    grid_flush
 
-    print_section "OTHER"
-    print_menu_item "E" "Open in editor"
-    print_menu_item "Q" "Quit"
-    echo ""
+    box_titled "├" "┤" "OTHER"
+    grid_item "E" "Open in editor"
+    grid_item "Q" "Quit"
+    grid_flush
+    box_bottom
     read -e -rp "$MAIN_PROMPT" opt
     if [[ -n "$opt" ]]; then
       history -s "$opt"
@@ -2341,7 +2395,7 @@ show_dashboard() {
       c|C) submenu_run gradle c ;;
       c[[:space:]]*|C[[:space:]]*|c[a-zA-Z]*|C[a-zA-Z]*) submenu_run gradle c "${opt:1}" once ;;
       6) run_and_pause action_clean ;;
-      b|B) echo ""; action_build_release || read -rp "Press Enter to return..." ;;
+      b|B) echo ""; action_build_release || pause_return ;;
       y|Y) run_and_pause action_import_icons ;;
       d|D) submenu_run devices d ;;
       d[[:space:]]*|D[[:space:]]*|d[a-zA-Z0-9]*|D[a-zA-Z0-9]*) submenu_run devices d "${opt:1}" once; keep_screen=1 ;;
@@ -2416,6 +2470,7 @@ show_help() {
 }
 
 # --- CLI Entry Point ---
+ui_refresh_width
 if [[ $# -eq 0 ]]; then
   load_config ""
   show_dashboard
