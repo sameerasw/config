@@ -6,6 +6,11 @@
 # ==============================================================================
 
 set -euo pipefail
+shopt -s extglob
+case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+  *UTF-8*|*utf8*|*UTF8*) ;;
+  *) export LC_CTYPE=UTF-8 ;;
+esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_CONFIG="essentials.android.config"
@@ -43,21 +48,68 @@ log_warn()    { echo -e "${C_WARN}[WARN]${RESET} $*"; }
 log_error()   { echo -e "${C_ERROR}[ERROR]${RESET} $*" >&2; }
 
 # --- Shared TUI helpers ---
-print_divider() { echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"; }
+UI_W=60
+UI_LINE_W=""
+UI_LINE=""
+UI_ANSI_RE='\\033\[+([0-9;])m'
+
+ui_refresh_width() {
+  local cols
+  cols=$(tput cols 2>/dev/null || echo 80)
+  UI_W=$((cols - 2))
+  (( UI_W > 74 )) && UI_W=74
+  (( UI_W < 46 )) && UI_W=46
+  if [[ "$UI_LINE_W" != "$UI_W" ]]; then
+    printf -v UI_LINE '%*s' "$UI_W" ''
+    UI_LINE="${UI_LINE// /─}"
+    UI_LINE_W="$UI_W"
+  fi
+  return 0
+}
+
+plain_text() { printf '%s' "${1//$UI_ANSI_RE/}"; }
+
+print_divider() { echo -e "  ${C_MUTED}${UI_LINE:0:$((UI_W - 2))}${RESET}"; }
+
+box_top() {
+  local fill=$((UI_W - 5 - ${#1}))
+  printf '%b\n' "${C_MUTED}╭─${RESET} ${BOLD}${C_PRIMARY}$1${RESET} ${C_MUTED}${UI_LINE:0:$fill}╮${RESET}"
+}
+
+box_bottom() { printf '%b\n' "${C_MUTED}╰${UI_LINE:0:$((UI_W - 2))}╯${RESET}"; }
+
+box_row() {
+  local left="$1" right="${2:-}"
+  local pl="${left//$UI_ANSI_RE/}" pr="${right//$UI_ANSI_RE/}"
+  local pad=$((UI_W - 4 - ${#pl} - ${#pr}))
+  (( pad < 1 )) && pad=1
+  printf '%b%*s%b\n' "${C_MUTED}│${RESET} $left" "$pad" '' "$right ${C_MUTED}│${RESET}"
+}
 
 print_header() {
+  ui_refresh_width
   echo ""
-  echo -e "${BOLD}${C_PRIMARY}$1${RESET} ${2:-}"
-  print_divider
+  box_top "$1"
+  box_row "${2:-}" "${3:-}"
+  box_bottom
+}
+
+print_section() {
+  local fill=$((UI_W - 5 - ${#1}))
+  printf '%b\n' "  ${C_MUTED}${BOLD}$1${RESET} ${C_MUTED}${UI_LINE:0:$fill}${RESET}"
 }
 
 print_menu_item() {
-  local chevron=""
-  [[ -n "${4:-}" ]] && chevron=" ${C_MUTED}›${RESET}"
-  printf "  ${BOLD}%-5s${RESET} %-30s ${C_MUTED}%-14s${RESET}%b\n" "[$1]" "$2" "${3:-}" "$chevron"
+  local label="$2" plain label_pad key chevron=""
+  [[ -n "${4:-}" ]] && chevron=1
+  plain="${label//$UI_ANSI_RE/}${chevron:+ ›}"
+  printf -v label_pad '%*s' "$((28 - ${#plain}))" ''
+  (( ${#plain} >= 28 )) && label_pad=" "
+  printf -v key '%-2s' "$1"
+  printf '%b\n' "  \033[48;5;238m${C_PRIMARY}${BOLD} ${key} ${RESET}  ${label}${chevron:+ ${C_ACCENT}›${RESET}}${label_pad}${C_MUTED}${3:-}${RESET}"
 }
 
-print_back_hint() { echo -e "${C_MUTED}Press ${BOLD}[Esc]${RESET}${C_MUTED} to go back${RESET}"; }
+print_back_hint() { echo -e "  ${C_MUTED}Esc${RESET} ${C_MUTED}go back${RESET}"; }
 
 trim() {
   local v="$1"
@@ -1763,7 +1815,7 @@ submenu_run() {
       first=0
       "${name}_draw"
       print_back_hint
-      read_line_esc "${name}> " || return 0
+      read_line_esc "  ${C_ACCENT}${name} ❯${RESET} " || return 0
       input="$INPUT_LINE"
     fi
     input="$(trim "$input")"
@@ -1881,11 +1933,13 @@ git_do_add() {
 
 git_draw() {
   refresh_git_info
-  print_header "git" "${C_SUCCESS}${PROJECT_GIT_BRANCH}${RESET} ${PROJECT_GIT_INFO}"
+  print_header "git" "${C_SUCCESS}${PROJECT_GIT_BRANCH}${RESET}  ${PROJECT_GIT_INFO}"
+  print_section "BRANCH"
   print_menu_item "D" "Checkout & pull develop" "gd"
   print_menu_item "B" "New branch" "gb <name>"
   print_menu_item "S" "Switch branch" "gs <name>"
   print_menu_item "PR" "Checkout PR" "gpr <id|#id>"
+  print_section "CHANGES"
   print_menu_item "C" "Commit" "gc <message>"
   print_menu_item "A" "Add all" "ga"
 }
@@ -1968,17 +2022,17 @@ gradle_props_menu() {
       return 1
     fi
     clear
-    print_header "gradle properties" "${C_MUTED}${gradle_file#$CONFIG_project_dir/}${RESET}"
+    print_header "gradle properties" "${C_PRIMARY}${gradle_file#$CONFIG_project_dir/}${RESET}"
     local i
     for i in "${!keys[@]}"; do
       print_menu_item "$((i + 1))" "${keys[$i]}" "${vals[$i]}"
     done
-    print_divider
-    echo -e "${C_MUTED}Pick a number, '<n> <value>' to set directly, or '<n>+' to bump a number.${RESET}"
+    echo ""
+    echo -e "  ${C_MUTED}number to edit  ·  <n> <value> to set  ·  <n>+ to bump${RESET}"
     print_back_hint
     [[ -n "$status" ]] && echo -e "$status"
     status=""
-    read_line_esc "props> " || return 0
+    read_line_esc "  ${C_ACCENT}props ❯${RESET} " || return 0
 
     local input num rest new idx key cur
     input="$(trim "$INPUT_LINE")"
@@ -2021,7 +2075,7 @@ gradle_props_menu() {
 
 gradle_draw() {
   refresh_gradle_info
-  print_header "gradle" "${C_MUTED}${PROJECT_VERSION}${RESET}"
+  print_header "gradle" "${C_PRIMARY}${CONFIG_project_name}${RESET}" "${C_MUTED}${PROJECT_VERSION}${RESET}"
   print_menu_item "S" "Sync" "cs"
   print_menu_item "C" "Clean build" "cc"
   print_menu_item "P" "Properties" "cp" menu
@@ -2070,24 +2124,24 @@ devices_draw() {
   devices_refresh
   local current="${SELECTED_DEVICE:-none}"
   print_header "devices" "${C_SUCCESS}${current}${RESET}"
+  print_section "CONNECTED"
   if (( ${#DEV_SERIALS[@]} == 0 )); then
     echo -e "  ${C_MUTED}No devices connected${RESET}"
   fi
   local i serial marker kind
   for i in "${!DEV_SERIALS[@]}"; do
     serial="${DEV_SERIALS[$i]}"
-    marker=" "
+    marker="${C_MUTED}○${RESET}"
     [[ "$serial" == "$SELECTED_DEVICE" ]] && marker="${C_SUCCESS}●${RESET}"
     if is_wireless_serial "$serial"; then kind="wifi"; else kind="usb"; fi
-    printf "  ${BOLD}%-5s${RESET} %b %-28s ${C_MUTED}%s · %s${RESET}\n" "[$((i + 1))]" "$marker" "$serial" "${DEV_MODELS[$i]:-unknown}" "$kind"
+    print_menu_item "$((i + 1))" "${marker} ${serial}" "${DEV_MODELS[$i]:-unknown} · $kind"
   done
-  print_divider
+  print_section "ACTIONS"
   print_menu_item "W" "Connect wireless" "dw [ip:port]"
   print_menu_item "P" "Pair wireless" "dp [ip:port code]"
   print_menu_item "M" "Mirror" "dm [n]"
   print_menu_item "X" "Disconnect" "dx [n]"
   print_menu_item "D" "Save as default" "dd"
-  echo -e "${C_MUTED}Pick a number to switch device.${RESET}"
 }
 
 devices_do_select() {
@@ -2197,52 +2251,54 @@ show_dashboard() {
   [[ -f "$hist_file" ]] && history -r "$hist_file" 2>/dev/null || true
 
   local keep_screen=0
+  MAIN_PROMPT=$'\001'"$(printf '%b' "$C_ACCENT")"$'\002'"  ❯ "$'\001'"$(printf '%b' "$RESET")"$'\002'
   while true; do
     get_project_details
     if (( keep_screen )); then echo ""; else clear; fi
     keep_screen=0
-    echo -e "${BOLD}${C_PRIMARY}android-build${RESET}"
-    print_divider
-    echo -e "  ${C_ACCENT}${CONFIG_project_name}${RESET}${C_ACCENT}${PROJECT_TARGET_TYPE}${RESET} ${C_MUTED}${PROJECT_VERSION}${RESET}"
-    echo -e "  ${C_PRIMARY}${CONFIG_package_name}${RESET} ${C_MUTED}${PROJECT_SDK}${RESET}"
+    ui_refresh_width
     refresh_device_info
-    echo -e "  ${C_SUCCESS}${SELECTED_DEVICE}${RESET} ${C_MUTED}${DEVICE_INFO}${RESET}"
+    box_top "android-build"
+    box_row "${C_ACCENT}◆${RESET} ${BOLD}${CONFIG_project_name}${RESET}${C_MUTED}${PROJECT_TARGET_TYPE}${RESET}" "${C_MUTED}${PROJECT_VERSION}${RESET}"
+    box_row "${C_PRIMARY}▪${RESET} ${CONFIG_package_name}" "${C_MUTED}${PROJECT_SDK}${RESET}"
+    if [[ -n "$SELECTED_DEVICE" ]]; then
+      box_row "${C_SUCCESS}▸${RESET} ${DEVICE_INFO:-$SELECTED_DEVICE}" "${C_MUTED}${SELECTED_DEVICE}${RESET}"
+    else
+      box_row "${C_ERROR}▸${RESET} ${C_MUTED}No device${RESET}"
+    fi
     if [[ -n "$PROJECT_GIT_BRANCH" ]]; then
-      echo -e "  ${C_SUCCESS}${PROJECT_GIT_BRANCH}${RESET} ${PROJECT_GIT_INFO}"
+      box_row "${C_WARN}±${RESET} ${C_SUCCESS}${PROJECT_GIT_BRANCH}${RESET}  ${PROJECT_GIT_INFO}"
     fi
-    print_divider
-    
-    # Section 1: Build & Run
+    box_bottom
+    echo ""
+
+    print_section "BUILD"
     if [[ "$CONFIG_show_run_debug" == "true" ]]; then
-      echo -e "  ${BOLD}[R]${RESET} Run & Debug"
+      print_menu_item "R" "Run & Debug"
     fi
-    echo -e "  ${BOLD}[I]${RESET} Install Debug"
+    print_menu_item "I" "Install Debug"
     if has_optimized_build_config; then
-      echo -e "  ${BOLD}[O]${RESET} Optimized debug"
+      print_menu_item "O" "Optimized debug"
     fi
-    echo -e "  ${BOLD}[L]${RESET} Logcat"
-    echo ""
+    print_menu_item "B" "Release build"
+    print_menu_item "L" "Logcat"
 
-    # Section 3: Tools & Builds
-    echo -e "  ${BOLD}[C]${RESET} Configure Gradle ${C_MUTED}›${RESET}"
-    echo -e "  ${BOLD}[T]${RESET} Format code"
-    echo -e "  ${BOLD}[B]${RESET} Release build"
-    echo -e "  ${BOLD}[Y]${RESET} Import icons"
-    echo ""
+    print_section "PROJECT"
+    print_menu_item "C" "Configure Gradle" "cs cc cp" menu
+    print_menu_item "T" "Format code"
+    print_menu_item "Y" "Import icons"
+    print_menu_item "G" "Git" "gd gb gs gpr gc ga" menu
+    print_menu_item "P" "Switch project"
 
-    # Section 4: Device & Project
-    echo -e "  ${BOLD}[A]${RESET} App ${C_MUTED}›${RESET}"
-    echo -e "  ${BOLD}[D]${RESET} Devices ${C_MUTED}›${RESET}"
-    echo -e "  ${BOLD}[G]${RESET} Git ${C_MUTED}›${RESET}"
-    echo -e "  ${BOLD}[P]${RESET} Switch Project"
-    echo ""
+    print_section "DEVICE"
+    print_menu_item "A" "App" "as af" menu
+    print_menu_item "D" "Devices" "dw dm dp dx" menu
 
-    # Section 5: Editor & Quit
-    echo -e "  ${BOLD}[E]${RESET} Open in editor"
-    echo -e "  ${BOLD}[Q]${RESET} Quit"
-    print_divider
-    
-    read -e -rp "> " opt
+    print_section "OTHER"
+    print_menu_item "E" "Open in editor"
+    print_menu_item "Q" "Quit"
+    echo ""
+    read -e -rp "$MAIN_PROMPT" opt
     if [[ -n "$opt" ]]; then
       history -s "$opt"
       history -w "$hist_file" 2>/dev/null || true
