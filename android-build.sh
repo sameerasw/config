@@ -1502,6 +1502,21 @@ refresh_target_type() {
   PROJECT_TARGET_TYPE="$TARGET_TYPE_VALUE"
 }
 
+# Cached per device serial so redraws stay instant.
+refresh_device_info() {
+  [[ "${DEVICE_INFO_KEY:-}" == "${SELECTED_DEVICE:-}" ]] && return 0
+  DEVICE_INFO_KEY="${SELECTED_DEVICE:-}"
+  DEVICE_INFO=""
+  [[ -z "$DEVICE_INFO_KEY" ]] && return 0
+  local out name model android
+  out="$(adb_cmd shell 'getprop ro.product.marketname; getprop ro.product.model; getprop ro.build.version.release' 2>/dev/null | tr -d '\r')" || true
+  { IFS= read -r name; IFS= read -r model; IFS= read -r android; } <<< "$out"
+  name="${name:-$model}"
+  local kind="usb"
+  is_wireless_serial "$DEVICE_INFO_KEY" && kind="wifi"
+  DEVICE_INFO="${name:+$name · }${android:+Android $android · }$kind"
+}
+
 get_project_details() {
   refresh_git_info
   refresh_gradle_info
@@ -2188,13 +2203,13 @@ show_dashboard() {
     keep_screen=0
     echo -e "${BOLD}${C_PRIMARY}android-build${RESET}"
     print_divider
-    echo -e "  ${BOLD}Project:${RESET}   ${C_ACCENT}${CONFIG_project_name}${RESET}${C_ACCENT}${PROJECT_TARGET_TYPE}${RESET} ${C_MUTED}${PROJECT_VERSION}${RESET}"
-    echo -e "  ${BOLD}Package:${RESET}   ${C_PRIMARY}${CONFIG_package_name}${RESET} ${C_MUTED}${PROJECT_SDK}${RESET}"
+    echo -e "  ${C_ACCENT}${CONFIG_project_name}${RESET}${C_ACCENT}${PROJECT_TARGET_TYPE}${RESET} ${C_MUTED}${PROJECT_VERSION}${RESET}"
+    echo -e "  ${C_PRIMARY}${CONFIG_package_name}${RESET} ${C_MUTED}${PROJECT_SDK}${RESET}"
+    refresh_device_info
+    echo -e "  ${C_SUCCESS}${SELECTED_DEVICE}${RESET} ${C_MUTED}${DEVICE_INFO}${RESET}"
     if [[ -n "$PROJECT_GIT_BRANCH" ]]; then
-      echo -e "  ${BOLD}Git:${RESET}       ${C_SUCCESS}${PROJECT_GIT_BRANCH}${RESET} ${PROJECT_GIT_INFO}"
+      echo -e "  ${C_SUCCESS}${PROJECT_GIT_BRANCH}${RESET} ${PROJECT_GIT_INFO}"
     fi
-    echo -e "  ${BOLD}Device:${RESET}    ${C_SUCCESS}${SELECTED_DEVICE}${RESET}"
-    echo -e "  ${BOLD}Task:${RESET}      ${C_WARN}${CONFIG_gradle_task}${RESET} [${CONFIG_build_variant}]"
     print_divider
     
     # Section 1: Build & Run
