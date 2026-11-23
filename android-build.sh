@@ -1856,6 +1856,178 @@ git_menu() {
   done
 }
 
+gradle_props() {
+  python3 - "$@" <<'PYEOF'
+import re, sys
+path, mode = sys.argv[1], sys.argv[2]
+text = open(path).read()
+m = re.search(r'defaultConfig\s*\{', text)
+if not m:
+    sys.exit(0)
+start = m.end()
+depth, i = 1, start
+while i < len(text) and depth:
+    depth += (text[i] == '{') - (text[i] == '}')
+    i += 1
+end = i - 1
+block = text[start:end]
+rules = [
+    ('versionCode', r'(versionCode\s*=\s*)(\d+)()', 'versionCode'),
+    ('versionName', r'(versionName\s*=\s*")([^"]*)(")', 'versionName'),
+]
+found = []
+for key, rx, _ in rules:
+    mm = re.search(rx, block)
+    if mm:
+        found.append((key, mm.group(2), rx))
+for mm in re.finditer(r'^[ \t]*val\s+(\w+)\s*=\s*(\d+|"[^"]*")[ \t]*$', block, re.M):
+    key = mm.group(1)
+    found.append((key, mm.group(2).strip('"'), r'(^[ \t]*val\s+' + key + r'\s*=\s*"?)(\d+|(?<=")[^"]*)("?[ \t]*$)'))
+for mm in re.finditer(r'buildConfigField\(\s*"(\w+)"\s*,\s*"(\w+)"\s*,\s*"((?:[^"\\]|\\.)*)"\s*\)', block):
+    if re.fullmatch(r'[\w.\-\\"]+', mm.group(3)) and not re.search(r'[A-Za-z_]\w*\.\w+\(', mm.group(3)):
+        key = mm.group(2)
+        found.append((key, mm.group(3), r'(buildConfigField\(\s*"\w+"\s*,\s*"' + key + r'"\s*,\s*")((?:[^"\\]|\\.)*)("\s*\))'))
+if mode == 'list':
+    for key, val, _ in found:
+        print(f'{key}|{val}')
+elif mode == 'set':
+    key, new = sys.argv[3], sys.argv[4]
+    for k, v, rx in found:
+        if k == key:
+            nb = re.sub(rx, lambda mm: mm.group(1) + new + mm.group(3), block, count=1, flags=re.M)
+            open(path, 'w').write(text[:start] + nb + text[end:])
+            break
+PYEOF
+}
+
+gradle_menu_draw() {
+  echo ""
+  echo -e "${BOLD}${C_PRIMARY}gradle${RESET}"
+  echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"
+  echo -e "  ${BOLD}[S]${RESET} Sync            ${C_MUTED}cs${RESET}"
+  echo -e "  ${BOLD}[C]${RESET} Clean build     ${C_MUTED}cc${RESET}"
+  echo -e "  ${BOLD}[P]${RESET} Properties      ${C_MUTED}cp${RESET}"
+  echo -e "${C_MUTED}Press ${BOLD}[Esc]${RESET}${C_MUTED} to go back${RESET}"
+}
+
+gradle_props_menu() {
+  local gradle_file status=""
+  gradle_file=$(find_app_gradle_file)
+  if [[ -z "$gradle_file" ]]; then
+    log_error "No app gradle file found."
+    return 1
+  fi
+  while true; do
+    local keys=() vals=() line
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      keys+=("${line%%|*}")
+      vals+=("${line#*|}")
+    done < <(gradle_props "$gradle_file" list)
+    if (( ${#keys[@]} == 0 )); then
+      log_warn "No editable properties found in $gradle_file"
+      return 1
+    fi
+    clear
+    echo -e "${BOLD}${C_PRIMARY}gradle properties${RESET} ${C_MUTED}${gradle_file#$CONFIG_project_dir/}${RESET}"
+    echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"
+    local i
+    for i in "${!keys[@]}"; do
+      printf "  ${BOLD}[%d]${RESET} %-28s ${C_ACCENT}%s${RESET}\n" "$((i + 1))" "${keys[$i]}" "${vals[$i]}"
+    done
+    echo -e "${C_MUTED}──────────────────────────────────────────────────${RESET}"
+    echo -e "${C_MUTED}Pick a number, or '<n> <value>' to set directly. '+' after a number bumps it (e.g. 2+).${RESET}"
+    echo -e "${C_MUTED}Press ${BOLD}[Esc]${RESET}${C_MUTED} to go back${RESET}"
+    [[ -n "$status" ]] && echo -e "$status"
+    status=""
+    git_read_line "props> " || return 0
+    local input num rest new
+    input="$(git_trim "$GIT_LINE")"
+    [[ -z "$input" ]] && continue
+    num="${input%%[^0-9]*}"
+    rest="$(git_trim "${input#"$num"}")"
+    if [[ -z "$num" ]] || (( num < 1 || num > ${#keys[@]} )); then
+      status="${C_WARN}[WARN]${RESET} Invalid selection."
+      continue
+    fi
+    local idx=$((num - 1)) key="${keys[$((num - 1))]}" cur="${vals[$((num - 1))]}"
+    if [[ "$rest" == "+" ]]; then
+      if [[ "$cur" =~ ^[0-9]+$ ]]; then
+        new=$((cur + 1))
+      else
+        status="${C_WARN}[WARN]${RESET} $key is not numeric."
+        continue
+      fi
+    elif [[ -n "$rest" ]]; then
+      new="$rest"
+    else
+      echo ""
+      echo -e "  ${BOLD}$key${RESET} = ${C_ACCENT}$cur${RESET}"
+      if [[ "$cur" =~ ^[0-9]+$ ]]; then
+        git_read_line "New value (Enter '+' to bump, Esc to cancel): " || continue
+      else
+        git_read_line "New value (Esc to cancel): " || continue
+      fi
+      new="$(git_trim "$GIT_LINE")"
+      [[ -z "$new" ]] && continue
+      if [[ "$new" == "+" ]]; then
+        if [[ "$cur" =~ ^[0-9]+$ ]]; then
+          new=$((cur + 1))
+        else
+          status="${C_WARN}[WARN]${RESET} $key is not numeric."
+          continue
+        fi
+      fi
+    fi
+    if [[ "$cur" =~ ^[0-9]+$ && ! "$new" =~ ^[0-9]+$ ]]; then
+      status="${C_WARN}[WARN]${RESET} $key must be a number."
+      continue
+    fi
+    gradle_props "$gradle_file" set "$key" "$new"
+    status="${C_SUCCESS}[SUCCESS]${RESET} $key: $cur → $new"
+  done
+}
+
+gradle_dispatch() {
+  case "$1" in
+    s) action_sync ;;
+    c) action_clean ;;
+    p) gradle_props_menu ;;
+    *) log_warn "Unknown gradle command '$1'."; return 1 ;;
+  esac
+}
+
+gradle_menu() {
+  local input="${1:-}" once="${2:-}"
+  while true; do
+    if [[ -z "$input" ]]; then
+      gradle_menu_draw
+      git_read_line "gradle> " || return 0
+      input="$GIT_LINE"
+    fi
+    input="$(git_trim "$input")"
+    if [[ -z "$input" ]]; then
+      continue
+    fi
+    if [[ "$input" =~ ^[cC]([a-zA-Z]|[[:space:]]) ]]; then
+      input="$(git_trim "${input:1}")"
+    fi
+    local sub
+    sub="$(printf '%s' "$input" | tr '[:upper:]' '[:lower:]')"
+    echo ""
+    if gradle_dispatch "$sub"; then
+      [[ "$sub" != p ]] && log_success "Done."
+    else
+      log_warn "Gradle command did not complete."
+    fi
+    if [[ -n "$once" ]]; then
+      [[ "$sub" != p ]] && read -rp "Press Enter to return..."
+      return 0
+    fi
+    input=""
+  done
+}
+
 # --- Interactive TUI Dashboard ---
 show_dashboard() {
   select_device
@@ -1894,9 +2066,8 @@ show_dashboard() {
 
     # Section 3: Tools & Builds
     echo -e "  ${BOLD}[M]${RESET} Mirror"
-    echo -e "  ${BOLD}[U]${RESET} Gradle Sync"
+    echo -e "  ${BOLD}[C]${RESET} Configure Gradle"
     echo -e "  ${BOLD}[T]${RESET} Format code"
-    echo -e "  ${BOLD}[C]${RESET} Clean build"
     echo -e "  ${BOLD}[B]${RESET} Release build"
     echo -e "  ${BOLD}[Y]${RESET} Import icons"
     echo ""
@@ -1945,11 +2116,12 @@ show_dashboard() {
       f|F|5) echo ""; action_stop || true; sleep 1 ;;
       s|S|4) echo ""; action_launch || true; sleep 1 ;;
       m|M|7) echo ""; action_mirror || true; sleep 1 ;;
-      u|U) echo ""; action_sync || true; read -rp "Press Enter to return..." ;;
       g|G) git_menu "" ;;
       g[[:space:]]*|G[[:space:]]*|g[a-zA-Z]*|G[a-zA-Z]*) git_menu "${opt:1}" once ;;
       t|T) echo ""; action_format_code || true; read -rp "Press Enter to return..." ;;
-      c|C|6) echo ""; action_clean || true; read -rp "Press Enter to return..." ;;
+      c|C) gradle_menu "" ;;
+      c[[:space:]]*|C[[:space:]]*|c[a-zA-Z]*|C[a-zA-Z]*) gradle_menu "${opt:1}" once ;;
+      6) echo ""; action_clean || true; read -rp "Press Enter to return..." ;;
       b|B) echo ""; action_build_release || read -rp "Press Enter to return..." ;;
       y|Y) echo ""; action_import_icons || true; read -rp "Press Enter to return..." ;;
       w|W|8) echo ""; action_wireless_connect || true; read -rp "Press Enter to return..." ;;
@@ -2004,7 +2176,7 @@ show_help() {
   echo -e "  release (B)         Build release bundle / APK"
   echo -e "  icons (Y)           Import Material Symbols drawables"
   echo -e "  mirror (M)          Launch scrcpy screen mirroring"
-  echo -e "  sync (U)            Run Gradle sync & daemon check"
+  echo -e "  sync                Run Gradle sync & daemon check"
   echo -e "  wifi (W)            Wireless ADB connection helper"
   echo -e "  devices (D)         List connected devices"
   echo -e "  project (P)         Switch active project"
