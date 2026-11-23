@@ -1170,13 +1170,18 @@ action_uninstall() {
 }
 
 action_mirror() {
-  select_device
+  local serial="${1:-}"
+  if [[ -z "$serial" ]]; then
+    select_device
+    serial="$SELECTED_DEVICE"
+  fi
   if ! command -v scrcpy >/dev/null 2>&1; then
     log_error "'scrcpy' is not installed. Install it via 'brew install scrcpy'."
     return 1
   fi
-  log_info "Starting screen mirror for ${C_PRIMARY}$SELECTED_DEVICE${RESET}..."
-  scrcpy -s "$SELECTED_DEVICE" --window-title "$CONFIG_project_name ($SELECTED_DEVICE)" --always-on-top >/dev/null 2>&1 &
+  log_info "Starting screen mirror for ${C_PRIMARY}$serial${RESET}..."
+  scrcpy -s "$serial" --window-title "$CONFIG_project_name ($serial)" --always-on-top >/dev/null 2>&1 &
+  disown 2>/dev/null || true
   log_success "Mirroring started in background."
 }
 
@@ -2048,6 +2053,7 @@ devices_draw() {
   print_divider
   print_menu_item "W" "Connect wireless" "dw [ip:port]"
   print_menu_item "P" "Pair wireless" "dp [ip:port code]"
+  print_menu_item "M" "Mirror" "dm [n]"
   print_menu_item "X" "Disconnect" "dx [n]"
   print_menu_item "D" "Save as default" "dd"
   echo -e "${C_MUTED}Pick a number to switch device.${RESET}"
@@ -2112,6 +2118,20 @@ devices_do_disconnect() {
   return 0
 }
 
+devices_do_mirror() {
+  SUBMENU_QUIET=1
+  local serial="$SELECTED_DEVICE"
+  if [[ -n "${1:-}" ]]; then
+    [[ "$1" =~ ^[0-9]+$ ]] && (( $1 >= 1 && $1 <= ${#DEV_SERIALS[@]} )) || { log_warn "No device [$1]."; return 1; }
+    serial="${DEV_SERIALS[$(($1 - 1))]}"
+  fi
+  if [[ -z "$serial" ]]; then
+    log_warn "No device selected."
+    return 1
+  fi
+  action_mirror "$serial"
+}
+
 devices_do_default() {
   if [[ -z "$SELECTED_DEVICE" ]]; then
     log_warn "No device selected."
@@ -2131,6 +2151,7 @@ devices_dispatch() {
     w) devices_do_connect "$2" ;;
     p) devices_do_pair "$2" ;;
     x) devices_do_disconnect "$2" ;;
+    m) devices_do_mirror "$2" ;;
     d) devices_do_default ;;
     *) log_warn "Unknown devices command '$1'."; return 1 ;;
   esac
@@ -2177,7 +2198,6 @@ show_dashboard() {
     echo ""
 
     # Section 3: Tools & Builds
-    echo -e "  ${BOLD}[M]${RESET} Mirror"
     echo -e "  ${BOLD}[C]${RESET} Configure Gradle ${C_MUTED}›${RESET}"
     echo -e "  ${BOLD}[T]${RESET} Format code"
     echo -e "  ${BOLD}[B]${RESET} Release build"
@@ -2232,7 +2252,6 @@ show_dashboard() {
       l|L|3) run_and_pause action_logs ;;
       f|F|5) echo ""; action_stop || true; keep_screen=1 ;;
       s|S|4) echo ""; action_launch || true; keep_screen=1 ;;
-      m|M|7) echo ""; action_mirror || true; keep_screen=1 ;;
       g|G) submenu_run git g ;;
       g[[:space:]]*|G[[:space:]]*|g[a-zA-Z]*|G[a-zA-Z]*) submenu_run git g "${opt:1}" once ;;
       t|T) run_and_pause action_format_code ;;
@@ -2242,7 +2261,7 @@ show_dashboard() {
       b|B) echo ""; action_build_release || read -rp "Press Enter to return..." ;;
       y|Y) run_and_pause action_import_icons ;;
       d|D) submenu_run devices d ;;
-      d[[:space:]]*|D[[:space:]]*|d[a-zA-Z0-9]*|D[a-zA-Z0-9]*) submenu_run devices d "${opt:1}" once ;;
+      d[[:space:]]*|D[[:space:]]*|d[a-zA-Z0-9]*|D[a-zA-Z0-9]*) submenu_run devices d "${opt:1}" once; keep_screen=1 ;;
       p|P)
         select_project_interactive
         load_config "${CONFIG_FILE:-}"
