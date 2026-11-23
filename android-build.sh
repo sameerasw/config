@@ -1415,26 +1415,6 @@ action_open_editor() {
   fi
 }
 
-action_wireless_connect() {
-  echo -e "\n${BOLD}${C_PRIMARY}=== Wireless ADB Pair & Connect ===${RESET}"
-  echo -e "1. On phone: Settings -> Developer Options -> Wireless Debugging."
-  echo ""
-  read -rp "Do you need to pair first? (y/N): " need_pair
-  if [[ "$need_pair" =~ ^[Yy]$ ]]; then
-    read -rp "Enter Phone IP:PORT for pairing: " pair_addr
-    read -rp "Enter 6-digit Pairing Code: " pair_code
-    adb pair "$pair_addr" "$pair_code"
-  fi
-
-  echo ""
-  read -rp "Enter Phone IP:PORT to connect: " conn_addr
-  if [[ -n "$conn_addr" ]]; then
-    adb connect "$conn_addr"
-    log_success "Connected. Checking active devices..."
-    adb devices -l
-  fi
-}
-
 # Helper to extract live project info for dashboard
 build_git_info() {
   local dir="$1" line staged=0 modified=0 untracked=0 ahead=0 behind=0 header="" out=""
@@ -1736,7 +1716,7 @@ prompt_reinstall_or_esc() {
 # Input is "<sub> [arg]" (an optional leading <prefix> letter is accepted); "once" runs a single command and returns.
 submenu_run() {
   local name="$1" prefix="$2" input="${3:-}" once="${4:-}" first=1
-  local prefix_re="^[${prefix}$(printf '%s' "$prefix" | tr '[:lower:]' '[:upper:]')]([a-zA-Z]|[[:space:]])"
+  local prefix_re="^[${prefix}$(printf '%s' "$prefix" | tr '[:lower:]' '[:upper:]')]([a-zA-Z0-9]|[[:space:]])"
   while true; do
     if [[ -z "$input" ]]; then
       (( first )) && clear
@@ -2016,6 +1996,126 @@ gradle_dispatch() {
   esac
 }
 
+# --- Devices submenu ---
+is_wireless_serial() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+$ || "$1" == *_adb-tls-connect* ]]; }
+
+devices_refresh() {
+  DEV_SERIALS=()
+  DEV_MODELS=()
+  local line
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    DEV_SERIALS+=("$(echo "$line" | awk '{print $1}')")
+    DEV_MODELS+=("$(echo "$line" | grep -o 'model:[^ ]*' | cut -d: -f2 || true)")
+  done < <(get_connected_devices)
+}
+
+devices_draw() {
+  devices_refresh
+  local current="${SELECTED_DEVICE:-none}"
+  print_header "devices" "${C_SUCCESS}${current}${RESET}"
+  if (( ${#DEV_SERIALS[@]} == 0 )); then
+    echo -e "  ${C_MUTED}No devices connected${RESET}"
+  fi
+  local i serial marker kind
+  for i in "${!DEV_SERIALS[@]}"; do
+    serial="${DEV_SERIALS[$i]}"
+    marker=" "
+    [[ "$serial" == "$SELECTED_DEVICE" ]] && marker="${C_SUCCESS}●${RESET}"
+    if is_wireless_serial "$serial"; then kind="wifi"; else kind="usb"; fi
+    printf "  ${BOLD}%-5s${RESET} %b %-28s ${C_MUTED}%s · %s${RESET}\n" "[$((i + 1))]" "$marker" "$serial" "${DEV_MODELS[$i]:-unknown}" "$kind"
+  done
+  print_divider
+  print_menu_item "W" "Connect wireless" "dw [ip:port]"
+  print_menu_item "P" "Pair wireless" "dp [ip:port code]"
+  print_menu_item "X" "Disconnect" "dx [n]"
+  print_menu_item "D" "Save as default" "dd"
+  echo -e "${C_MUTED}Pick a number to switch device.${RESET}"
+}
+
+devices_do_select() {
+  local n="$1"
+  if [[ ! "$n" =~ ^[0-9]+$ ]] || (( n < 1 || n > ${#DEV_SERIALS[@]} )); then
+    log_warn "No device [$n]."
+    return 1
+  fi
+  SELECTED_DEVICE="${DEV_SERIALS[$((n - 1))]}"
+  log_success "Selected ${BOLD}$SELECTED_DEVICE${RESET}."
+}
+
+devices_do_connect() {
+  local addr="${1:-}"
+  if [[ -z "$addr" ]]; then
+    if discover_and_connect_mdns; then
+      devices_refresh
+      return 0
+    fi
+    echo -e "${C_MUTED}On phone: Settings → Developer options → Wireless debugging.${RESET}"
+    ask_value "Phone IP:PORT" || return 1
+    addr="$ASK_RESULT"
+  fi
+  [[ "$addr" == *:* ]] || addr="$addr:5555"
+  if adb connect "$addr" 2>&1 | tee /dev/stderr | grep -qi "connected to"; then
+    devices_refresh
+    SELECTED_DEVICE="$addr"
+    return 0
+  fi
+  return 1
+}
+
+devices_do_pair() {
+  local addr="${1%%[[:space:]]*}" code=""
+  [[ "$1" == *[[:space:]]* ]] && code="$(trim "${1#*[[:space:]]}")"
+  if [[ -z "$addr" ]]; then
+    ask_value "Pairing IP:PORT" || return 1
+    addr="$ASK_RESULT"
+  fi
+  if [[ -z "$code" ]]; then
+    ask_value "6-digit pairing code" || return 1
+    code="$ASK_RESULT"
+  fi
+  adb pair "$addr" "$code" && echo -e "${C_MUTED}Now connect with ${BOLD}dw${RESET}${C_MUTED}.${RESET}"
+}
+
+devices_do_disconnect() {
+  local serial="$SELECTED_DEVICE"
+  if [[ -n "${1:-}" ]]; then
+    [[ "$1" =~ ^[0-9]+$ ]] && (( $1 >= 1 && $1 <= ${#DEV_SERIALS[@]} )) || { log_warn "No device [$1]."; return 1; }
+    serial="${DEV_SERIALS[$(($1 - 1))]}"
+  fi
+  if ! is_wireless_serial "$serial"; then
+    log_warn "${serial:-No device} is not a wireless device."
+    return 1
+  fi
+  adb disconnect "$serial"
+  [[ "$serial" == "$SELECTED_DEVICE" ]] && SELECTED_DEVICE=""
+  return 0
+}
+
+devices_do_default() {
+  if [[ -z "$SELECTED_DEVICE" ]]; then
+    log_warn "No device selected."
+    return 1
+  fi
+  if [[ -z "${CONFIG_FILE:-}" || ! -f "$CONFIG_FILE" ]]; then
+    log_warn "No config file to save into."
+    return 1
+  fi
+  save_target_device_to_config "$SELECTED_DEVICE"
+}
+
+devices_dispatch() {
+  devices_refresh
+  case "$1" in
+    [0-9]*) devices_do_select "$1" ;;
+    w) devices_do_connect "$2" ;;
+    p) devices_do_pair "$2" ;;
+    x) devices_do_disconnect "$2" ;;
+    d) devices_do_default ;;
+    *) log_warn "Unknown devices command '$1'."; return 1 ;;
+  esac
+}
+
 # --- Interactive TUI Dashboard ---
 show_dashboard() {
   select_device
@@ -2061,8 +2161,7 @@ show_dashboard() {
     echo ""
 
     # Section 4: Device & Project
-    echo -e "  ${BOLD}[W]${RESET} Wireless ADB"
-    echo -e "  ${BOLD}[D]${RESET} Switch Device"
+    echo -e "  ${BOLD}[D]${RESET} Devices ${C_MUTED}›${RESET}"
     echo -e "  ${BOLD}[G]${RESET} Git ${C_MUTED}›${RESET}"
     echo -e "  ${BOLD}[P]${RESET} Switch Project"
     echo ""
@@ -2112,8 +2211,8 @@ show_dashboard() {
       6) run_and_pause action_clean ;;
       b|B) echo ""; action_build_release || read -rp "Press Enter to return..." ;;
       y|Y) run_and_pause action_import_icons ;;
-      w|W|8) run_and_pause action_wireless_connect ;;
-      d|D) select_device "true" ;;
+      d|D) submenu_run devices d ;;
+      d[[:space:]]*|D[[:space:]]*|d[a-zA-Z0-9]*|D[a-zA-Z0-9]*) submenu_run devices d "${opt:1}" once ;;
       p|P)
         select_project_interactive
         load_config "${CONFIG_FILE:-}"
@@ -2165,8 +2264,8 @@ show_help() {
   echo -e "  icons (Y)           Import Material Symbols drawables"
   echo -e "  mirror (M)          Launch scrcpy screen mirroring"
   echo -e "  sync                Run Gradle sync & daemon check"
-  echo -e "  wifi (W)            Wireless ADB connection helper"
-  echo -e "  devices (D)         List connected devices"
+  echo -e "  wifi                Connect to a wireless ADB device"
+  echo -e "  devices             List connected devices"
   echo -e "  project (P)         Switch active project"
   echo -e "  editor (E)          Open workspace / project in Antigravity IDE"
   echo -e "  help                Show this help message\n"
@@ -2270,7 +2369,7 @@ case "${SUBCOMMAND:-}" in
     get_connected_devices
     ;;
   wifi)
-    action_wireless_connect
+    devices_refresh; devices_do_connect ""
     ;;
   editor|open)
     action_open_editor
