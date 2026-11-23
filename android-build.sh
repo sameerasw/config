@@ -488,7 +488,7 @@ run_gradle_with_stats() {
     cols=$(tput cols 2>/dev/null || echo 80)
     IFS='|' read -r thermal load cpus mem jcpu jrss <<< "$snap"
     text=" ⏱ $(( $(date +%s) - start ))s  Thermal ${thermal:-?}  Load ${load:-?}/${cpus:-?}  Mem free ${mem:-?}%  Java ${jcpu:-0}% CPU · ${jrss:-0} MB "
-    (( ${#text} > cols - 1 )) && text="${text:0:$(( cols - 1 ))}"
+    (( ${#text} > cols - 4 )) && text="${text:0:$(( cols - 4 ))}"
     local color="$C_SUCCESS"
     [[ "${thermal:-Nominal}" != "Nominal" ]] && color="$C_WARN"
     [[ "${thermal:-}" == Throttled* ]] && color="$C_ERROR"
