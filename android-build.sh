@@ -315,6 +315,7 @@ load_config() {
     CONFIG_apk_path=$(get_config_val "apk_path")
     CONFIG_target_device=$(get_config_val "target_device")
     CONFIG_log_tags=$(get_config_val "log_tags")
+    CONFIG_show_run_debug=$(get_config_val "show_run_debug" "false")
     CONFIG_java_home=$(get_config_val "java_home")
     CONFIG_telegram_chat_id=$(get_config_val "telegram_chat_id" "$DEFAULT_TELEGRAM_CHAT_ID")
     CONFIG_telegram_topic_id=$(get_config_val "telegram_topic_id" "$DEFAULT_TELEGRAM_TOPIC_ID")
@@ -336,6 +337,7 @@ load_config() {
     CONFIG_apk_path="${CONFIG_apk_path:-}"
     CONFIG_target_device="${CONFIG_target_device:-}"
     CONFIG_log_tags="${CONFIG_log_tags:-}"
+    CONFIG_show_run_debug="${CONFIG_show_run_debug:-false}"
     CONFIG_java_home="${CONFIG_java_home:-}"
     CONFIG_telegram_chat_id="${CONFIG_telegram_chat_id:-$DEFAULT_TELEGRAM_CHAT_ID}"
     CONFIG_telegram_topic_id="${CONFIG_telegram_topic_id:-$DEFAULT_TELEGRAM_TOPIC_ID}"
@@ -2159,8 +2161,10 @@ show_dashboard() {
     print_divider
     
     # Section 1: Build & Run
-    echo -e "  ${BOLD}[R]${RESET} Run & Debug"
-    echo -e "  ${BOLD}[I]${RESET} Install only"
+    if [[ "$CONFIG_show_run_debug" == "true" ]]; then
+      echo -e "  ${BOLD}[R]${RESET} Run & Debug"
+    fi
+    echo -e "  ${BOLD}[I]${RESET} Install Debug"
     if has_optimized_build_config; then
       echo -e "  ${BOLD}[O]${RESET} Optimized debug"
     fi
@@ -2198,7 +2202,13 @@ show_dashboard() {
     fi
 
     case "$opt" in
-      r|R|1) run_and_pause action_run_all ;;
+      r|R|1)
+        if [[ "$CONFIG_show_run_debug" == "true" ]]; then
+          run_and_pause action_run_all
+        else
+          log_warn "Invalid input."; keep_screen=1
+        fi
+        ;;
       i|I|2)
         while true; do
           echo ""
