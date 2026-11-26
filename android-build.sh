@@ -16,6 +16,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_CONFIG="essentials.android.config"
 DEFAULT_TELEGRAM_CHAT_ID="-1001653455300"
 DEFAULT_TELEGRAM_TOPIC_ID="71368"
+DEFAULT_CHANGELOG_SKIP_PATTERN="^(Community|New|Update) translations( |$)"
 
 # --- Styling & Colors ---
 RESET="\033[0m"
@@ -467,6 +468,7 @@ load_config() {
     CONFIG_java_home=$(get_config_val "java_home")
     CONFIG_telegram_chat_id=$(get_config_val "telegram_chat_id" "$DEFAULT_TELEGRAM_CHAT_ID")
     CONFIG_telegram_topic_id=$(get_config_val "telegram_topic_id" "$DEFAULT_TELEGRAM_TOPIC_ID")
+    CONFIG_changelog_skip_pattern=$(get_config_val "changelog_skip_pattern" "$DEFAULT_CHANGELOG_SKIP_PATTERN")
   else
     detect_project
     CONFIG_project_name="${CONFIG_project_name:-Essentials}"
@@ -489,6 +491,7 @@ load_config() {
     CONFIG_java_home="${CONFIG_java_home:-}"
     CONFIG_telegram_chat_id="${CONFIG_telegram_chat_id:-$DEFAULT_TELEGRAM_CHAT_ID}"
     CONFIG_telegram_topic_id="${CONFIG_telegram_topic_id:-$DEFAULT_TELEGRAM_TOPIC_ID}"
+    CONFIG_changelog_skip_pattern="${CONFIG_changelog_skip_pattern:-$DEFAULT_CHANGELOG_SKIP_PATTERN}"
   fi
 
   if [[ -n "$CONFIG_java_home" && -d "$CONFIG_java_home" ]]; then
@@ -1658,43 +1661,57 @@ html_escape() {
   printf '%s' "$t"
 }
 
-# Commits on the current branch not in any release or pre-release tag, newest first,
-# trimmed so the whole caption stays under Telegram's 1024 character limit.
+# Commits on the current branch not in any release or pre-release tag, newest first.
+# Subjects matching changelog_skip_pattern (community translation commits by default) are left out.
 older_commits_label() {
   if (( $1 == 1 )); then printf '… 1 older commit'; else printf '… %d older commits' "$1"; fi
 }
 
-build_changelog_caption() {
-  local head="$1"
-  local limit=1000
+CHANGELOG_TITLE=""
+CHANGELOG_LINES=()
+CHANGELOG_BODY=""
+CHANGELOG_SHOWN=0
+
+collect_changelog() {
+  CHANGELOG_TITLE=""
+  CHANGELOG_LINES=()
   local repo="$CONFIG_project_dir"
   git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || return 0
 
   # Anything already in a tagged release (stable or pre-release) is excluded.
-  local last_tag title
+  local last_tag
   last_tag=$(git -C "$repo" tag --sort=-creatordate 2>/dev/null | head -1 || true)
   local -a range=(HEAD)
   if [[ -n "$last_tag" ]]; then
     range=(HEAD --not --tags)
-    title="<b>Changes since $(html_escape "$last_tag")</b>"
+    CHANGELOG_TITLE="<b>Changes since $(html_escape "$last_tag")</b>"
   else
-    title="<b>Recent changes</b>"
+    CHANGELOG_TITLE="<b>Recent changes</b>"
   fi
 
-  local -a lines=()
+  local skip="${CONFIG_changelog_skip_pattern:-$DEFAULT_CHANGELOG_SKIP_PATTERN}"
   local subject
   while IFS= read -r subject; do
     [[ -z "$subject" ]] && continue
+    [[ -n "$skip" && "$subject" =~ $skip ]] && continue
     (( ${#subject} > 90 )) && subject="${subject:0:89}…"
-    lines+=("• $(html_escape "$subject")")
-  done < <(git -C "$repo" log --no-merges --format='%s' -n 200 "${range[@]}" 2>/dev/null)
+    CHANGELOG_LINES+=("• $(html_escape "$subject")")
+  done < <(git -C "$repo" log --no-merges --format='%s' -n 500 "${range[@]}" 2>/dev/null)
+}
 
-  (( ${#lines[@]} == 0 )) && return 0
+# Fits as many changelog lines as possible after $1 within Telegram's 1024 character caption limit.
+build_changelog_caption() {
+  local head="$1"
+  local limit=1000
+  CHANGELOG_BODY=""
+  CHANGELOG_SHOWN=0
+  local total=${#CHANGELOG_LINES[@]}
+  (( total == 0 )) && return 0
 
-  local body=$'\n\n'"$title"$'\n'"<blockquote>"
-  local total=${#lines[@]} shown=0 i line more
+  local body=$'\n\n'"$CHANGELOG_TITLE"$'\n'"<blockquote>"
+  local shown=0 i line more
   for (( i = 0; i < total; i++ )); do
-    line="${lines[$i]}"
+    line="${CHANGELOG_LINES[$i]}"
     more=""
     (( i + 1 < total )) && more=$'\n'"$(older_commits_label $(( total - i - 1 )))"
     if (( ${#head} + ${#body} + 1 + ${#line} + ${#more} + 13 > limit )); then
@@ -1707,11 +1724,53 @@ build_changelog_caption() {
   (( shown == 0 )) && return 0
   (( shown < total )) && body+=$'\n'"$(older_commits_label $(( total - shown )))"
   body+="</blockquote>"
-  printf '%s' "$body"
+  CHANGELOG_BODY="$body"
+  CHANGELOG_SHOWN=$shown
+}
+
+# Sends changelog lines from index $4 on as replies to message $3, split under Telegram's 4096 character message limit.
+send_changelog_followups() {
+  local token="$1" chat_id="$2" reply_to="$3" start="$4" topic_id="${5:-}"
+  local total=${#CHANGELOG_LINES[@]}
+  (( start >= total )) && return 0
+  local limit=3800
+  local -a chunks=()
+  local chunk="" i line
+  for (( i = start; i < total; i++ )); do
+    line="${CHANGELOG_LINES[$i]}"
+    if [[ -n "$chunk" ]] && (( ${#chunk} + 1 + ${#line} > limit )); then
+      chunks+=("$chunk")
+      chunk=""
+    fi
+    [[ -n "$chunk" ]] && chunk+=$'\n'
+    chunk+="$line"
+  done
+  [[ -n "$chunk" ]] && chunks+=("$chunk")
+
+  local count=${#chunks[@]} n text response sent=0
+  for (( n = 0; n < count; n++ )); do
+    text="<b>Older changes"
+    (( count > 1 )) && text+=" ($(( n + 1 ))/${count})"
+    text+="</b>"$'\n'"<blockquote>${chunks[$n]}</blockquote>"
+    response=$(curl -s -X POST "https://api.telegram.org/bot${token}/sendMessage" \
+      --form-string "chat_id=${chat_id}" \
+      ${topic_id:+--form-string "message_thread_id=${topic_id}"} \
+      ${reply_to:+--form-string "reply_to_message_id=${reply_to}"} \
+      --form-string "parse_mode=HTML" \
+      --form-string "disable_web_page_preview=true" \
+      --form-string "text=${text}") || true
+    if [[ "$response" == *'"ok":true'* ]]; then
+      sent=$(( sent + 1 ))
+    else
+      log_error "Failed to send changelog message $(( n + 1 ))/${count}: $(echo "$response" | sed -E 's/bot[0-9]+:[A-Za-z0-9_-]+/bot<token>/g' | head -c 300)"
+      return 1
+    fi
+  done
+  log_success "Sent ${sent} follow-up changelog message$( (( sent == 1 )) || printf 's') with $(( total - start )) older commit$( (( total - start == 1 )) || printf 's')."
 }
 
 send_apk_to_tidwib() {
-  local apk="$1" flavor="${2:-}"
+  local apk="$1" flavor="${2:-}" full_changelog="${3:-false}"
   load_env_secrets
   local token="${TELEGRAM_BOT_TOKEN:-}"
   local chat_id="${CONFIG_telegram_chat_id:-$DEFAULT_TELEGRAM_CHAT_ID}"
@@ -1756,7 +1815,9 @@ send_apk_to_tidwib() {
   [[ -n "$branch" ]] && source_line+=" from ${branch}@${commit}"
   caption+=$'\n'"<i>$(html_escape "$source_line")</i>"
   caption+=$'\n'"${built_at}"
-  caption+=$(build_changelog_caption "$caption")
+  collect_changelog
+  build_changelog_caption "$caption"
+  caption+="$CHANGELOG_BODY"
 
   echo ""
   echo -e "${BOLD}Upload to TIDWIB${RESET}"
@@ -1767,6 +1828,7 @@ send_apk_to_tidwib() {
   [[ -n "$min_sdk" ]] && echo -e "  ${C_MUTED}SDK      ${RESET} min ${min_sdk}${target_sdk:+, target $target_sdk}"
   echo -e "  ${C_MUTED}Size     ${RESET} ${size_h} (${size_bytes} bytes)"
   [[ -n "$branch" ]] && echo -e "  ${C_MUTED}Git      ${RESET} ${branch}@${commit}"
+  echo -e "  ${C_MUTED}Changes  ${RESET} ${#CHANGELOG_LINES[@]} commit$( (( ${#CHANGELOG_LINES[@]} == 1 )) || printf 's')$( [[ "$full_changelog" == true ]] && (( CHANGELOG_SHOWN < ${#CHANGELOG_LINES[@]} )) && printf ', older ones as follow-up messages')"
   echo ""
 
   local resp_file
@@ -1795,6 +1857,9 @@ send_apk_to_tidwib() {
     log_success "Sent to TIDWIB in $(awk -v t="$time_total" 'BEGIN { printf "%.1fs", t }') at $(awk -v s="$speed" 'BEGIN { printf "%.1f MB/s", s / 1048576 }')."
     [[ -n "$message_id" ]] && log_info "Message ID: ${message_id}"
     [[ -n "$link" ]] && log_info "Link: ${C_ACCENT}${link}${RESET}"
+    if [[ "$full_changelog" == true ]]; then
+      send_changelog_followups "$token" "$chat_id" "$message_id" "$CHANGELOG_SHOWN" "$topic_id" || true
+    fi
   else
     log_error "Telegram upload failed (HTTP ${http_code}): $(echo "$response" | sed -E 's/bot[0-9]+:[A-Za-z0-9_-]+/bot<token>/g' | head -c 300)"
     return 1
@@ -1808,7 +1873,7 @@ prompt_release_output() {
     perl -MPOSIX -e 'tcflush(0, TCIFLUSH)' 2>/dev/null || true
     echo ""
     if [[ -n "$apk" ]]; then
-      echo -en "${C_MUTED}Press ${BOLD}[Enter]${RESET}${C_MUTED} to open in Finder, ${BOLD}[T]${RESET}${C_MUTED} to send to TIDWIB chat, or ${BOLD}[Esc]${RESET}${C_MUTED} to return...${RESET}"
+      echo -en "${C_MUTED}Press ${BOLD}[Enter]${RESET}${C_MUTED} to open in Finder, ${BOLD}[T]${RESET}${C_MUTED} to send to TIDWIB chat, ${BOLD}[Y]${RESET}${C_MUTED} to send with the full changelog, or ${BOLD}[Esc]${RESET}${C_MUTED} to return...${RESET}"
     else
       echo -en "${C_MUTED}Press ${BOLD}[Enter]${RESET}${C_MUTED} to open in Finder, or ${BOLD}[Esc]${RESET}${C_MUTED} to return...${RESET}"
     fi
@@ -1833,6 +1898,10 @@ prompt_release_output() {
       elif [[ -n "$apk" && ( "$key" == "t" || "$key" == "T" ) ]]; then
         echo ""
         send_apk_to_tidwib "$apk" "$flavor" || true
+        break
+      elif [[ -n "$apk" && ( "$key" == "y" || "$key" == "Y" ) ]]; then
+        echo ""
+        send_apk_to_tidwib "$apk" "$flavor" true || true
         break
       fi
     done
